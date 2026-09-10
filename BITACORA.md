@@ -153,3 +153,110 @@ Los datos de prueba se limpiaron: la base local y la de producción quedaron sin
 3. Lo de la lista de arriba que quedó postergado, más `logrotate` y backups de la base.
 
 El detalle de cada uno está en `ESTADO.md` §3.
+
+---
+
+## 2026-09-10 (tarde) — El panel con sistema de diseño, y las credenciales de Whop rotables
+
+Commits: `f4b3ba6` (panel + checkout), `b8e4c7c` (credenciales). Release de la primera:
+`20260910225629`.
+
+### De dónde salió
+
+Dos pedidos seguidos. El primero, "hacé linda la UI del panel y que el checkout quede como esta
+captura". El segundo, "necesito que la API key de Whop se setee manual, y que verifique y rote el biz
+id".
+
+### Lo que se midió antes de escribir
+
+**`WHOP_API_KEY` no estaba cacheada.** Se lee dentro de `config()`, que `whopFetch` llama en cada
+llamada. Lo que la fija es el arranque del proceso, no el build.
+
+**El `.env.production` es una COPIA dentro de cada release, no un symlink a `shared/`.** Verificado:
+`/srv/hilvapay/current/.env.production` es un archivo propio, `600 deploy:deploy`. Es el hallazgo que
+más cuesta redescubrir y el que motivó todo lo demás: **editar solo el de `shared/` no cambia nada
+hasta el próximo deploy**. Rotar una credencial a mano exige editar los dos y recargar PM2, y si
+editás uno solo parece que el cambio no tomó.
+
+**`config()` y `companyId()` solo se llaman desde adentro de `lib/whop.ts`**, y sus cinco call sites ya
+eran funciones `async`. Por eso pasarlas a `async` fue un refactor de un archivo y el contrato
+exportado del módulo no se movió. Si algún día se exportan, este cambio deja de ser contenido.
+
+**La base tenía 0 cobros** al momento de deployar el panel: 1 página activa, 0 funnels activos. Por eso
+la migración 004 se aplicó en producción sin ventana ni aviso. Vale registrarlo porque la próxima vez
+el número no va a ser 0, y entonces la decisión no es la misma.
+
+### La decisión de fondo: la base es un override, no un reemplazo
+
+Bajar la API key a la base es un downgrade de cómo se guarda un secreto, y se aceptó con los ojos
+abiertos:
+
+| | Antes | Ahora |
+|---|---|---|
+| Para robarla | shell en la VPS | la base **y** `CONFIG_ENCRYPTION_KEY` |
+| Para reemplazarla | shell en la VPS | la contraseña del panel |
+
+Lo segundo es lo que importa: **quien tenga `PANEL_PASSWORD` puede mandar los cobros siguientes a otra
+cuenta de Whop.** Contra eso hay tres cosas, y ninguna lo elimina: guardar y volver al entorno piden la
+contraseña de nuevo (no alcanza la cookie), la key nunca se devuelve al browser, y el cambio queda
+fechado en `whop_verificado_at`.
+
+Lo que **no** se hizo, a propósito: sacar `WHOP_API_KEY` de `ENV_CRITICAS_SIEMPRE` ni del `REQUIRED` de
+`deploy.sh`. Las dos listas se declaran iguales entre sí y los dos archivos documentan que aflojar una
+sola produce un rollback en loop. Dejándolas, el env garantiza que el servicio pueda cobrar con la
+tabla `config` vacía o con la clave de cifrado perdida — que es el camino de vuelta si esta pantalla
+guarda algo que no funciona.
+
+Por eso las columnas de la 006 nacen NULL, y NULL no es "sin configurar" sino "esta fila no opina".
+
+### Verificar contra Whop: el endpoint y el chequeo que no es obvio
+
+Se usa `GET /companies/{biz_id}`, lo que el README ya tenía medido. Pero verificar que responda 200 no
+alcanza: **`verificarCredenciales` compara el `id` que devolvió Whop contra el que se pidió.** Sin ese
+chequeo, un endpoint que ignora el path y contesta con otra company —que es exactamente lo que hace
+`/companies/me`— pasaría como válido, y se guardaría un biz id que cobra en la cuenta de otro.
+
+No pasa por `whopFetch`: ese resuelve las credenciales guardadas, y acá hay que probar unas que todavía
+no lo están. Hacerlo por ahí obligaría a agregarle un modo "usá estas otras" al cliente que ejecuta los
+cobros.
+
+Medido con la key de producción: `{ok:true, companyNombre:"Sinvanapp"}`. Un `biz_` inexistente da 404 y
+el mensaje culpa al biz id, no a la key.
+
+### Dos cosas que costaron y conviene no volver a pelear
+
+**`Uint8Array` es genérico desde TS 5.7.** `TextEncoder.encode()` y `Uint8Array.from()` devuelven
+`Uint8Array<ArrayBufferLike>`, y Web Crypto pide `BufferSource` sobre un `ArrayBuffer` común. Lo que lo
+arregla no es un `as` —eso dejaría pasar un `SharedArrayBuffer` de verdad— sino **no anotar los
+retornos**: `: Uint8Array` sin argumento de tipo es justo lo que ensancha. Dejando inferir desde
+`new Uint8Array(n)`, el tipo queda bien. Los `let iv: Uint8Array` también hay que dejarlos sin anotar.
+
+**Dos utilidades de Tailwind del mismo eje en un elemento son un bug, no un override.** `clasesControl('h-10')`
+generaba `h-9 px-3 h-10`: misma especificidad, así que gana la que Tailwind puso más abajo en la hoja,
+no la última del atributo `class`. El alto pasó a ser un parámetro (`'md' | 'lg' | 'auto'`) para que no
+se pueda expresar el conflicto.
+
+### Sobre el panel
+
+La regla de color es lo único que hay que respetar al agregar pantallas: acción primaria en casi-negro,
+cobalto para lo interactivo, **verde solo para "está cobrando"** y rojo solo para destructivo. Antes el
+verde era botón, estado y éxito a la vez, y por eso no se podía usar para significar algo.
+
+La barra pasó de seis secciones a ocho y la fila de una línea tuvo que moverse de `lg` a `xl`: ocho
+ítems piden ~750px y a 1024px les quedaban ~646px. `/admin/conexion` **no** es un noveno ítem por eso —
+se llega por el engranaje del header, que es donde corresponde una pantalla de configuración que se
+toca dos veces por año.
+
+El CTA del checkout quedó en `#15803D` y no en el `#16A34A` de la paleta: con el verde claro, texto
+blanco de 16px da 3.3:1 y no llega a AA. Con el oscuro, 5.0:1. Y es más parecido al verde de la captura
+de referencia.
+
+### Lo que quedó pendiente
+
+1. **`CONFIG_ENCRYPTION_KEY` no está en la VPS.** Sin ella `/admin/conexion` se ve y lo avisa, pero el
+   guardado se rechaza con 409 y el servicio sigue con el entorno. `openssl rand -hex 32`, y va en
+   `/srv/hilvapay/shared/.env.production` **y** en la copia de la release viva (ver el hallazgo de
+   arriba), o directamente en el próximo deploy.
+2. **`b8e4c7c` no está deployado.** Trae la migración 006, que es aditiva (`add column if not exists`).
+3. Sigue faltando el bot de Telegram y `RESEND_API_KEY`: el health los reporta como opcionales y el
+   vigilante detecta igual, pero no puede avisar.
