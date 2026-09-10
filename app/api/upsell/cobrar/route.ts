@@ -309,6 +309,51 @@ async function manejarErrorWhop(
     return respuestaProcesando(cobro, token);
   }
 
+  if (err.noSePudoProcesar) {
+    // Whop aceptó el request y no pudo cobrar, sin decir por qué (ver
+    // `WhopError.noSePudoProcesar`). El caso conocido es una tarjeta cuyo emisor
+    // exige 3DS en cada transacción: off-session no hay nadie que pueda
+    // responder el desafío, así que el cobro no llega ni a intentarse.
+    //
+    // Esto NO es `fallido`: en el checkout el comprador SÍ está presente y puede
+    // autenticarse. Se pide la tarjeta, que es el único camino por el que esta
+    // venta todavía puede entrar. Marcarlo fallido la descarta sin intentar.
+    //
+    // Se le crea la sesión de checkout acá y no en el cliente por lo mismo que
+    // en el caso `sin_metodo_guardado`: el precio y el plan salen de la base, no
+    // del browser.
+    console.warn(
+      `[upsell/cobrar] cobro ${cobro.id}: 400 de Whop sin código (${err.message}) → requiere_tarjeta`,
+    );
+
+    let sessionIdRecuperacion: string | null = null;
+    try {
+      const config = await crearCheckoutConfiguration({
+        planId: pagina.whop_plan_id,
+        metadata: { orden_id: cobro.orden_id, pagina_id: cobro.pagina_id },
+      });
+      sessionIdRecuperacion = config.id;
+    } catch (e) {
+      // Sin sesión igual se responde `requiere_tarjeta`: el loader redirige a
+      // `/pagos/<slug>?ot=…&r=1`, y esa página sabe crear su propia sesión. Es
+      // peor perder el camino de recuperación que arrancar sin el id listo.
+      console.error(`[upsell/cobrar] cobro ${cobro.id}: no se pudo crear la sesión de recuperación:`, e);
+    }
+
+    // `failure_message` se guarda igual aunque el estado no sea fallido: es lo
+    // único que queda del motivo real, y sin eso `/admin/cobros` muestra un
+    // "requiere_tarjeta" sin explicación.
+    await q(
+      `update cobros set status = 'requiere_tarjeta', failure_message = $2, updated_at = now()
+        where id = $1 and status not in ('pagado')`,
+      [cobro.id, err.message.slice(0, 500)],
+    );
+
+    const actualizado = await buscarCobro(cobro.orden_id, cobro.pagina_id);
+    const base = await respuestaDesdeCobro(actualizado ?? { ...cobro, status: 'requiere_tarjeta' }, token);
+    return { ...base, sessionIdRecuperacion };
+  }
+
   // Cualquier otro 4xx: acá sí es un rechazo real y determinado (datos
   // inválidos, permiso faltante, decline claro devuelto como error de
   // request). Se marca fallido con el mensaje.
@@ -358,6 +403,12 @@ function respuestaProcesando(cobro: Cobro, _token: string): RespuestaCobro {
  * pago pero no se reconoce el código, y ese mensaje ("tu banco necesita que
  * confirmes") no describe lo que pasó acá. Por eso ese caso usa un mensaje
  * genérico en vez de reusar la clasificación de declines.
+ *
+ * `requiere_tarjeta` sin `decline_code` es distinto y SÍ usa ese mensaje: es el
+ * caso de `WhopError.noSePudoProcesar`, donde Whop no pudo cobrar off-session y
+ * el motivo conocido es que el emisor exige 3DS. "Tu banco necesita que
+ * confirmes esta compra" es literalmente lo que pasó, y la acción que pide
+ * —volver a ingresar la tarjeta— es la que resuelve.
  */
 async function respuestaDesdeCobro(cobro: Cobro, token: string): Promise<RespuestaCobro> {
   const pedirTarjeta = cobro.status === 'requiere_tarjeta';

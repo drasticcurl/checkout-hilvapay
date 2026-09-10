@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizarPago } from './whop';
+import { normalizarPago, WhopError } from './whop';
 
 /**
  * `normalizarPago` es lo único que separa "la venta se registró bien" de "la
@@ -207,5 +207,81 @@ describe('normalizarPago — casos degenerados', () => {
     expect(normalizarPago({ id: 'p', next_payment_attempt_at: '2026-02-02' }).next_payment_attempt).toBe(
       '2026-02-02',
     );
+  });
+});
+
+/**
+ * `noSePudoProcesar` es la que decide si una venta se recupera o se descarta, así
+ * que los casos vienen de respuestas REALES de la API, medidas el 2026-09-11
+ * contra `POST /payments` con un cobro off-session. Cada `it` cita la respuesta
+ * que reproduce.
+ */
+describe('WhopError.noSePudoProcesar', () => {
+  it('es true con el 400 bad_request sin código: Whop no pudo cobrar', () => {
+    // Medido: los cuatro ids eran válidos (plan, member y payment_method
+    // existían y eran de la company de la key) y Whop devolvió:
+    //   {"error":{"type":"bad_request","message":"We could not process this
+    //    payment request right now. Please try again later."}}
+    const err = new WhopError(
+      400,
+      'We could not process this payment request right now. Please try again later.',
+      undefined,
+      undefined,
+      false,
+      'bad_request',
+    );
+    expect(err.noSePudoProcesar).toBe(true);
+  });
+
+  it('es false con parameter_missing: eso es un bug nuestro, no un cobro recuperable', () => {
+    // Medido, omitiendo account_id:
+    //   {"error":{"type":"invalid_request_error","code":"parameter_missing",
+    //    "message":"Missing required parameter: company_id.","param":"company_id"}}
+    // Pedirle la tarjeta al comprador no arregla un campo que no mandamos.
+    const err = new WhopError(
+      400,
+      'Missing required parameter: company_id.',
+      'parameter_missing',
+      'company_id',
+      false,
+      'invalid_request_error',
+    );
+    expect(err.noSePudoProcesar).toBe(false);
+  });
+
+  it('es false con un 404 not_found: el dato no existe y la tarjeta no lo crea', () => {
+    // Medido con ids inventados: 404 "This Member was not found" / "This Plan
+    // was not found" / "This PaymentToken was not found". Mandar al checkout
+    // ahí le cobraría el paso siguiente a una configuración rota.
+    const err = new WhopError(404, 'This Member was not found', undefined, undefined, false, 'not_found');
+    expect(err.noSePudoProcesar).toBe(false);
+  });
+
+  it('es false en 5xx, que ya tienen su propio camino con reintento', () => {
+    const err = new WhopError(500, 'boom', undefined, undefined, false, 'bad_request');
+    expect(err.noSePudoProcesar).toBe(false);
+    expect(err.reintentable).toBe(true);
+  });
+
+  it('es false en el 409 indeterminado: el cobro pudo haber salido', () => {
+    // Pedir la tarjeta acá arriesga cobrar dos veces.
+    const err = new WhopError(409, 'conflict', undefined, undefined, false, 'bad_request');
+    expect(err.noSePudoProcesar).toBe(false);
+    expect(err.indeterminado).toBe(true);
+  });
+
+  it('es false en un 400 sin type: sin la señal explícita no se asume recuperable', () => {
+    // Un 502 de proxy con HTML, por ejemplo, llega sin `type`. Ante la duda no
+    // se manda a nadie a poner la tarjeta de nuevo.
+    const err = new WhopError(400, 'algo salió mal');
+    expect(err.noSePudoProcesar).toBe(false);
+  });
+
+  it('el network_error sintético no cae acá', () => {
+    // lib/whop.ts tira 503 con code 'network_error' en timeout o red caída: el
+    // request PUDO haber llegado, así que va por procesando.
+    const err = new WhopError(503, 'no se pudo contactar a Whop (timeout)', 'network_error');
+    expect(err.noSePudoProcesar).toBe(false);
+    expect(err.reintentable).toBe(true);
   });
 });

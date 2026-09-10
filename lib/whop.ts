@@ -25,6 +25,14 @@ export class WhopError extends Error {
      * evitó un doble cobro.
      */
     readonly replayed = false,
+    /**
+     * El `error.type` de Whop: `bad_request`, `invalid_request_error`,
+     * `not_found`. Se guarda porque es lo único que separa un 400 "tus datos
+     * están mal" de un 400 "no pude procesar el cobro", y de esa distinción
+     * depende si al comprador se le pide la tarjeta o se le tira la venta a la
+     * basura. Ver `noSePudoProcesar`.
+     */
+    readonly type?: string,
   ) {
     super(message);
     this.name = 'WhopError';
@@ -43,6 +51,40 @@ export class WhopError extends Error {
   /** 5xx y 429: vale reintentar con la MISMA clave de idempotencia. */
   get reintentable(): boolean {
     return this.status >= 500 || this.status === 429;
+  }
+
+  /**
+   * Whop aceptó el request como bien formado y **no pudo cobrar** — distinto de
+   * "los datos que mandaste están mal".
+   *
+   * Se reconoce por `type: 'bad_request'` SIN `code`. Medido contra la API real
+   * el 2026-09-11, con un cobro off-session cuyos cuatro ids eran válidos:
+   *
+   *   400 {"error":{"type":"bad_request","message":"We could not process this
+   *        payment request right now. Please try again later."}}
+   *
+   * y ninguna otra pista: sin `decline_code`, sin `code`, sin objeto de pago
+   * creado. Los errores de DATOS son distintos y sí se pueden distinguir — se
+   * verificaron los cuatro casos contra la API:
+   *
+   *   · plan/member/payment_method inexistente → 404 `not_found`, con el
+   *     mensaje diciendo cuál ("This Member was not found")
+   *   · falta un campo obligatorio → 400 `invalid_request_error` con
+   *     `code: 'parameter_missing'` y `param`
+   *
+   * Por qué importa: un cobro off-session no puede completar un desafío 3DS,
+   * porque no hay nadie del otro lado para responderlo. Cuando el emisor lo
+   * exige, este es el error que llega. La venta NO está perdida — en el
+   * checkout el comprador SÍ está presente y puede autenticarse — pero solo si
+   * se lo manda ahí en vez de marcarle el cobro como fallido.
+   *
+   * Se excluye el 404 explícitamente: `type` no viene en todas las respuestas y
+   * un `not_found` sin type no puede caer acá. Pedirle la tarjeta a alguien
+   * porque el `member_id` no existe no arregla nada y encima le cobra el paso
+   * siguiente a una configuración rota.
+   */
+  get noSePudoProcesar(): boolean {
+    return this.status === 400 && this.type === 'bad_request' && !this.code;
   }
 }
 
@@ -137,13 +179,16 @@ export async function whopFetch<T>(path: string, init: RequestInit = {}, opts: O
   }
 
   if (!res.ok) {
-    const err = (body as { error?: { message?: string; code?: string; param?: string } } | null)?.error;
+    const err = (
+      body as { error?: { message?: string; code?: string; param?: string; type?: string } } | null
+    )?.error;
     throw new WhopError(
       res.status,
       err?.message ?? `Whop respondió ${res.status}`,
       err?.code,
       err?.param,
       replayed,
+      err?.type,
     );
   }
 
