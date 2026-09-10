@@ -7,9 +7,12 @@ Un panel donde asociás un producto de Whop a un link de pago (`/pagos/aguadearr
 checkout con HTML propio y el embed de Whop adentro, y el cobro one-click de los upsells contra la
 tarjeta que se guardó en la compra del front.
 
-**El plan completo, las decisiones y las tasks están en
-[`tasks/checkout-whop/00-PLAN-CHECKOUT-WHOP.md`](tasks/checkout-whop/00-PLAN-CHECKOUT-WHOP.md).** Este
-archivo es solo cómo levantarlo.
+**Qué está hecho, qué falta y qué no hay que romper: [`ESTADO.md`](ESTADO.md).**
+El plan, las decisiones y las tasks:
+[`tasks/checkout-whop/00-PLAN-CHECKOUT-WHOP.md`](tasks/checkout-whop/00-PLAN-CHECKOUT-WHOP.md).
+Cómo deployar: [`COMO-DEPLOYAR.md`](COMO-DEPLOYAR.md).
+
+Este archivo es solo cómo levantarlo.
 
 ---
 
