@@ -80,6 +80,25 @@ export async function middleware(req: NextRequest): Promise<NextResponse> {
     const hostPanel = (process.env.PANEL_HOST ?? '').toLowerCase();
     const hostPagos = (process.env.PAGOS_HOST ?? '').toLowerCase();
 
+    // La raíz del dominio del panel lleva al panel. Sin esto, entrar a
+    // hilvapay.hilvanapp.com muestra el "Nada por acá" de app/page.tsx: correcto
+    // para el dominio de pagos, desconcertante para el del panel — el que entra
+    // ahí viene a administrar, no a comprar.
+    //
+    // En el dominio de PAGOS la raíz sigue mostrando "Nada por acá" a propósito:
+    // es el host que va en anuncios y en links compartidos por WhatsApp, y no
+    // tiene por qué insinuar que existe un panel en algún lado.
+    //
+    // El health check del deploy no se rompe con esto: pega a 127.0.0.1:3020/,
+    // donde el host es una IP y `esLocal()` saltea todo este bloque antes de
+    // llegar acá. Verificado después de deployar.
+    if (hostPanel && host === hostPanel && pathname === '/') {
+      const admin = req.nextUrl.clone();
+      admin.pathname = '/admin';
+      admin.search = '';
+      return NextResponse.redirect(admin);
+    }
+
     // Si no están configurados, no se bloquea nada: un deploy al que le falta una
     // env var tiene que quedar accesible para poder arreglarlo, no tapiado.
     if (hostPanel && empiezaCon(pathname, SOLO_PANEL) && host !== hostPanel) {
@@ -130,6 +149,9 @@ export const config = {
    * del handler del webhook, menos formas hay de romperlo.
    */
   matcher: [
+    // La raíz entra al matcher solo para el redirect del dominio del panel. En
+    // el dominio de pagos sale por `NextResponse.next()` y sirve app/page.tsx.
+    '/',
     '/admin',
     '/admin/:path*',
     '/api/admin',
