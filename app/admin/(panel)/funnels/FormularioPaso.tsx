@@ -74,28 +74,48 @@ export function FormularioPaso({ paso, productos, permitirFront, onGuardar, onCa
   const slugNormalizado = previsualizarSlug(slug);
   const base = typeof window !== 'undefined' ? window.location.origin : '';
 
+  // El paso `front` no pregunta nada más que el producto. Todo lo demás no
+  // aplica o se deriva:
+  //   · nombre  → "Producto principal": es el único front del funnel, no hay
+  //               nada de qué distinguirlo.
+  //   · slug    → se deriva del nombre del producto. Es la URL del link de pago,
+  //               y hacerla tipear es una oportunidad de escribirla mal sin
+  //               ganar nada: nadie elige a mano el slug de su producto único.
+  //   · url_externa → el front se sirve de este lado, en /pagos/<slug>. Pedir
+  //               una URL externa para él es pedir un dato que no existe.
+  //   · permite_rechazo → en el front no hay nada que rechazar: o compra o no.
+  const esFront = tipo === 'front';
+
   function guardar(): void {
-    if (nombre.trim().length < 2) {
-      setError('El nombre de identificación es muy corto.');
-      return;
-    }
     if (!productoId) {
       setError('Elegí un producto.');
       return;
     }
-    if (!slugNormalizado) {
-      setError('El slug queda vacío. Probá con letras y números.');
+    if (!esFront && nombre.trim().length < 2) {
+      setError('El nombre de identificación es muy corto.');
+      return;
+    }
+    // En el front el slug sale del nombre del producto; en un upsell se escribe.
+    const slugFinal = esFront ? previsualizarSlug(producto?.nombre ?? '') : slugNormalizado;
+    if (!slugFinal) {
+      setError(
+        esFront
+          ? 'No se pudo derivar el slug del nombre del producto. Cambiale el nombre en Productos.'
+          : 'El slug queda vacío. Probá con letras y números.',
+      );
       return;
     }
 
     onGuardar({
       id: paso?.id ?? null,
-      slug: slugNormalizado,
+      slug: slugFinal,
       producto_id: productoId,
       tipo,
-      nombre: nombre.trim(),
+      nombre: esFront ? 'Producto principal' : nombre.trim(),
       url_externa: tipo === 'upsell' && urlExterna.trim() ? urlExterna.trim() : null,
-      permite_rechazo: permiteRechazo,
+      // En el front no hay rechazo posible: se fuerza en false sin importar el
+      // estado del toggle, que además no se muestra.
+      permite_rechazo: esFront ? false : permiteRechazo,
       producto: producto
         ? { id: producto.id, nombre: producto.nombre, precio: producto.precio, moneda: producto.moneda, imagen_url: null }
         : paso?.producto ?? { id: '', nombre: '', precio: '', moneda: 'usd', imagen_url: null },
@@ -141,7 +161,12 @@ export function FormularioPaso({ paso, productos, permitirFront, onGuardar, onCa
         ) : null}
 
         {/* Toggle "Activar botón de rechazo". Operable con teclado: es un
-            <button role="switch">, no un div con onClick. */}
+            <button role="switch">, no un div con onClick.
+
+            No se muestra en el front: ahí no hay nada que rechazar — o compra o
+            no compra. Mostrarlo invitaría a configurar un camino que el
+            resolutor ignora (ver lib/funnels.ts, `permite_rechazo`). */}
+        {esFront ? null : (
         <div className="mt-4 flex items-start justify-between gap-3">
           <div>
             <label htmlFor="toggle-rechazo" className="text-sm font-medium text-texto">
@@ -170,6 +195,9 @@ export function FormularioPaso({ paso, productos, permitirFront, onGuardar, onCa
           </button>
         </div>
 
+        )}
+
+        {esFront ? null : (
         <label className="mt-4 block" htmlFor="nombre-paso">
           <span className="mb-1 block text-sm font-medium text-texto">Nombre de identificación</span>
           <input
@@ -180,6 +208,8 @@ export function FormularioPaso({ paso, productos, permitirFront, onGuardar, onCa
             className="w-full rounded-md border border-borde px-3 py-2 text-sm focus:border-precio focus:outline-none focus:ring-1 focus:ring-precio"
           />
         </label>
+
+        )}
 
         <label className="mt-4 block" htmlFor="producto-paso">
           <span className="mb-1 block text-sm font-medium text-texto">Producto</span>
@@ -222,6 +252,15 @@ export function FormularioPaso({ paso, productos, permitirFront, onGuardar, onCa
           </label>
         ) : null}
 
+        {esFront ? (
+          <p className="mt-4 rounded-md bg-gray-50 p-3 text-xs text-texto-suave">
+            El link de pago se va a llamar{' '}
+            <code className="text-texto">
+              {base}/pagos/{producto ? previsualizarSlug(producto.nombre) : '…'}
+            </code>
+            , derivado del nombre del producto. Si querés otro, cambiale el nombre en Productos.
+          </p>
+        ) : (
         <label className="mt-4 block" htmlFor="slug-paso">
           <span className="mb-1 block text-sm font-medium text-texto">Slug</span>
           <input
@@ -236,6 +275,7 @@ export function FormularioPaso({ paso, productos, permitirFront, onGuardar, onCa
             <code>{base}/pagos/{slugNormalizado || '…'}</code>
           </span>
         </label>
+        )}
 
         {error ? (
           <p role="alert" className="mt-3 text-sm font-medium text-urgencia">

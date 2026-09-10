@@ -53,7 +53,20 @@ export const CajaTarjeta = forwardRef<ControlesTarjeta, {
         environment={environment}
         skipRedirect
         prefill={{ email }}
-        themeOptions={{ accentColor: 'blue', borderRadius: 8 }}
+        // ── Por qué se fuerza el claro y no se deja el default ───────────────
+        // El default de Whop es `theme: 'system'`: sigue el modo del sistema del
+        // visitante. Con la página de checkout en blanco, a cualquiera que tenga
+        // el celular en modo oscuro le salía el iframe NEGRO en el medio de una
+        // página blanca. Y no es un detalle estético: un formulario de tarjeta
+        // que se ve pegado con cinta es exactamente lo que hace abandonar una
+        // compra.
+        //
+        // `backgroundColor` es el que manda de verdad — la doc dice que el embed
+        // elige el color del texto según ese valor y que **anula `theme`**. Se
+        // pasan los dos igual: si algún día cambia esa precedencia, el `theme`
+        // explícito deja el embed en claro en vez de volver a seguir al sistema.
+        theme="light"
+        themeOptions={{ backgroundColor: '#ffffff', accentColor: 'blue', borderRadius: 8 }}
         styles={{ container: { paddingX: 0, paddingY: 0 } }}
         onStateChange={(state: WhopCheckoutState) => onReady(state === 'ready')}
         onPaymentError={(error: WhopCheckoutPaymentError) => onError(`${error.message}${error.code ? ` (${error.code})` : ''}`)}
