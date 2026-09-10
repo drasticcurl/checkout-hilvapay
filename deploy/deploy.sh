@@ -252,11 +252,13 @@ npm test
 STANDALONE="$RELEASE/.next/standalone"
 [[ -f "$STANDALONE/server.js" ]] || fail "no se generó .next/standalone (¿falta output:'standalone'?)"
 mkdir -p "$STANDALONE/public" "$STANDALONE/.next/static"
-# El `if` no es cosmético: este proyecto no tiene public/ hoy (sin assets
-# estáticos propios — el logo/embed los sirve Whop) y un `cp` de un directorio
-# inexistente aborta el deploy con set -e después de haber corrido build y
-# tests. Si en algún momento aparece un public/, este bloque ya lo cubre sin
-# tocar el script.
+# El `if` no es cosmético: si public/ desapareciera, un `cp` de un directorio
+# inexistente abortaría el deploy con set -e después de haber corrido build y
+# tests. Hoy public/ existe y tiene un solo archivo:
+# .well-known/apple-developer-merchantid-domain-association, el que Whop le
+# pide a Apple para habilitar Apple Pay en el checkout embebido. Si ese archivo
+# no llega al standalone, Whop deja de verificar el dominio y el botón de Apple
+# Pay desaparece del embed sin ningún error visible.
 if [ -d "$RELEASE/public" ]; then
   cp -a "$RELEASE/public/." "$STANDALONE/public/"
 fi
