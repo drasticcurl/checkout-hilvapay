@@ -7,8 +7,35 @@
 # crontab de deploy, hay que agregarle `deploy` como quinto campo antes del
 # comando.
 #
-# UN SOLO CRON: drenar la cola `salidas` cada minuto. GET /api/cron/salidas,
-# autenticado con `Authorization: Bearer $CRON_SECRET`.
+# TRES CRONS, todos GET a /api/cron/* con `Authorization: Bearer $CRON_SECRET`:
+#
+#   * * * * *      /api/cron/salidas       drena la cola: reporta las ventas y
+#                                          manda los emails de entrega
+#   */10 * * * *   /api/cron/reconciliar   cierra los cobros que quedaron a medias
+#   */15 * * * *   /api/cron/vigilar       avisa por Telegram si algo se rompió
+#
+# ── Por qué el primero corre cada minuto y los otros no ──────────────────────
+# La cola es trabajo ya decidido: cuanto antes se drene, antes recibe su producto
+# el comprador. La reconciliación, en cambio, hace hasta dos llamadas a la API de
+# Whop por cobro, y lo que llega hasta ella es la EXCEPCIÓN — el camino normal lo
+# resuelven el polling del browser y el webhook en segundos. Cada minuto gastaría
+# cuota para encontrar, casi siempre, cero filas.
+#
+# Con 10 minutos, el peor caso para alguien que cerró la pestaña es que su email
+# de entrega salga 10 minutos tarde. Con 15 para el vigilante, el peor caso es
+# enterarse de una disputa un cuarto de hora después — y las ventanas de silencio
+# de `lib/alertas.ts` están calculadas sobre esa frecuencia.
+#
+# ── Los logs van separados ───────────────────────────────────────────────────
+# `salidas.log` tiene una línea por minuto y ahogaría a los otros dos, que son
+# justamente los que se leen cuando algo pasó. Crear el directorio antes de
+# instalar esto:
+#
+#   sudo mkdir -p /var/log/hilvapay && sudo chown deploy:deploy /var/log/hilvapay
+#
+# Y ojo con el crecimiento: `salidas.log` son ~525k líneas por año. Un
+# /etc/logrotate.d/hilvapay con `weekly` y `rotate 8` sobre
+# /var/log/hilvapay/*.log lo resuelve, y todavía no está puesto.
 #
 # ── Por qué curl a 127.0.0.1 y no tsx ───────────────────────────────────────
 # El patrón de dashboard-admin (fetch-fx.ts, rollup.ts, etc.) es tsx corriendo
@@ -74,3 +101,22 @@
 # otro usuario el script sale con "no puedo leer" en el log, que es lo que hay
 # que buscar si la cola deja de drenarse.
 * * * * * /srv/hilvapay/repo/deploy/drenar-salidas.sh >> /var/log/hilvapay/salidas.log 2>&1
+
+# Reconciliar los cobros colgados, cada 10 minutos.
+#
+# Le pregunta a Whop por los cobros que quedaron en 'creando' o 'procesando' y
+# los cierra. Es la red que hace que el módulo NO dependa del webhook para saber
+# si entró la plata: Whop deshabilita un endpoint que falla 72 h seguidas y no
+# reenvía los eventos de ese período.
+#
+# En el log, el número a mirar es `rescatados`: cada uno es alguien que pagó y no
+# había recibido nada. Después, `errores`.
+*/10 * * * * /srv/hilvapay/repo/deploy/pegar-cron.sh /api/cron/reconciliar >> /var/log/hilvapay/reconciliar.log 2>&1
+
+# Vigilar y avisar por Telegram, cada 15 minutos.
+#
+# En el log, `sinCanal` > 0 es el caso a revisar: detectó un problema y no pudo
+# avisarlo (falta TELEGRAM_BOT_TOKEN, nadie dado de alta, Telegram caído). Esas
+# alertas NO quedan marcadas como enviadas, así que se reintentan en la corrida
+# siguiente en cuanto haya canal.
+*/15 * * * * /srv/hilvapay/repo/deploy/pegar-cron.sh /api/cron/vigilar >> /var/log/hilvapay/vigilar.log 2>&1

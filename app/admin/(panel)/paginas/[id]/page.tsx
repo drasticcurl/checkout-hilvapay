@@ -1,6 +1,8 @@
 import { notFound } from 'next/navigation';
 import { buscarPagina } from '../../../../../lib/admin/paginas';
 import { listarProductos } from '../../../../../lib/admin/productos';
+import { EncabezadoPantalla } from '../../../../../components/panel/ui';
+import { Volver } from '../../../../../components/panel/Volver';
 import { FormularioPagina } from '../FormularioPagina';
 
 /**
@@ -28,7 +30,11 @@ export default async function EditarPaginaPage({
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold text-texto">Editar link de pago</h1>
+      <Volver href="/admin">Links de pago</Volver>
+      <EncabezadoPantalla
+        titulo={`/pagos/${pagina.slug}`}
+        descripcion="Cambiar el slug cambia la URL: si ya está pegada en el funnel, el link viejo deja de existir."
+      />
       <FormularioPagina pagina={pagina} productos={productos} />
     </div>
   );

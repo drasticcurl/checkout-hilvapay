@@ -1,59 +1,91 @@
+/**
+ * `/admin/origenes` — la allowlist de CORS del cobro one-click. Sin el dominio
+ * del funnel activo acá, el botón de upsell recibe 403 al intentar cobrar.
+ */
+import { Fingerprint, Warning } from '@phosphor-icons/react/ssr';
 import { listarOrigenes } from '../../../../lib/admin/origenes';
+import {
+  Aviso,
+  Codigo,
+  EncabezadoPantalla,
+  EstadoVacio,
+  EstadoVivo,
+  SinDato,
+  TablaEnvoltorio,
+  Td,
+  Th,
+  Tr,
+} from '../../../../components/panel/ui';
+import { SwitchActivo } from '../SwitchActivo';
 import { EliminarOrigenButton } from './EliminarOrigenButton';
 import { FormularioOrigen } from './FormularioOrigen';
-import { SwitchActivo } from '../SwitchActivo';
 
 export const dynamic = 'force-dynamic';
 
 export default async function OrigenesPage(): Promise<JSX.Element> {
   const origenes = await listarOrigenes();
+  const activos = origenes.filter((o) => o.activo).length;
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold text-texto">Orígenes autorizados</h1>
-      <p className="max-w-2xl text-sm text-texto-suave">
-        La allowlist de CORS del cobro one-click. Sin el dominio del funnel activo acá, el botón de
-        upsell del funnel va a recibir <strong>403</strong> al intentar cobrar.
-      </p>
+      <EncabezadoPantalla
+        titulo="Orígenes autorizados"
+        descripcion="Los dominios que pueden disparar un cobro one-click. Es una allowlist: lo que no está acá, no cobra."
+      />
+
+      {origenes.length > 0 && activos === 0 ? (
+        <Aviso tono="alerta" icono={<Warning size={16} aria-hidden="true" />}>
+          Ningún origen está activo. El botón de upsell de cualquier funnel va a recibir{' '}
+          <span className="font-mono font-semibold">403</span> al intentar cobrar.
+        </Aviso>
+      ) : null}
 
       <FormularioOrigen />
 
       {origenes.length === 0 ? (
-        <p className="text-sm text-texto-suave">Todavía no hay orígenes autorizados.</p>
+        <EstadoVacio
+          icono={<Fingerprint size={20} aria-hidden="true" />}
+          titulo="Ningún dominio autorizado"
+          descripcion="Agregá el dominio del funnel con el formulario de arriba. Hasta entonces el cobro one-click responde 403 a todos."
+        />
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-borde">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-borde bg-gray-50 text-texto-suave">
-              <tr>
-                <th className="px-4 py-2 font-medium">Dominio</th>
-                <th className="px-4 py-2 font-medium">Nombre</th>
-                <th className="px-4 py-2 font-medium">Activo</th>
-                <th className="px-4 py-2 font-medium" />
-              </tr>
-            </thead>
-            <tbody>
-              {origenes.map((o) => (
-                <tr key={o.id} className="border-b border-borde last:border-0">
-                  <td className="px-4 py-3">
-                    <code className="text-xs text-texto">{o.origen}</code>
-                  </td>
-                  <td className="px-4 py-3 text-texto-suave">{o.nombre ?? '—'}</td>
-                  <td className="px-4 py-3">
+        <TablaEnvoltorio>
+          <thead>
+            <tr>
+              <Th>Dominio</Th>
+              <Th>Nombre</Th>
+              <Th>Estado</Th>
+              <Th className="text-right">Quitar</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {origenes.map((o) => (
+              <Tr key={o.id}>
+                <Td>
+                  <Codigo className="max-w-[24rem] truncate">{o.origen}</Codigo>
+                </Td>
+                <Td className="text-tinta-2">{o.nombre ?? <SinDato />}</Td>
+                <Td>
+                  <div className="flex items-center gap-3">
                     <SwitchActivo
                       id={o.id}
                       activo={o.activo}
                       endpoint="/api/admin/origenes"
-                      mensajeConfirmacion={`¿Autorizar "${o.origen}" a disparar cobros one-click?`}
+                      etiqueta={o.origen}
+                      mensajeConfirmacion={`${o.origen} va a poder disparar cobros one-click contra tarjetas ya guardadas.`}
                     />
-                  </td>
-                  <td className="px-4 py-3 text-right">
+                    <EstadoVivo activo={o.activo} />
+                  </div>
+                </Td>
+                <Td className="text-right">
+                  <div className="flex justify-end">
                     <EliminarOrigenButton id={o.id} origen={o.origen} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                  </div>
+                </Td>
+              </Tr>
+            ))}
+          </tbody>
+        </TablaEnvoltorio>
       )}
     </div>
   );

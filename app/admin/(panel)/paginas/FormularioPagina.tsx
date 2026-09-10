@@ -3,6 +3,15 @@
 import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 import type { ConfigPagina, Pagina, Producto } from '../../../../lib/tipos';
+import {
+  Boton,
+  Campo,
+  Interruptor,
+  OpcionRadio,
+  Tarjeta,
+  clasesControl,
+  unir,
+} from '@/components/panel/ui';
 
 type Props = { pagina?: Pagina; productos: Producto[] };
 
@@ -62,136 +71,167 @@ export function FormularioPagina({ pagina, productos }: Props): JSX.Element {
   }
 
   return (
-    <form onSubmit={onSubmit} className="max-w-xl space-y-5">
-      <label className="block">
-        <span className="block text-sm font-medium text-texto">Slug</span>
-        <input
-          type="text"
-          required
-          value={slug}
-          onChange={(e) => setSlug(e.target.value)}
-          placeholder="aguadearroz1"
-          className="mt-1.5 w-full rounded-md border border-borde px-3 py-2 font-mono text-sm text-texto focus:border-precio focus:outline-none focus:ring-1 focus:ring-precio"
-        />
-        <span className="mt-1 block text-xs text-texto-suave">
-          Se normaliza solo: minúsculas, sin espacios ni acentos. El link queda en /pagos/&lt;slug&gt;.
-        </span>
-      </label>
-
-      <label className="block">
-        <span className="block text-sm font-medium text-texto">Producto</span>
-        <select
-          required
-          value={productoId}
-          onChange={(e) => setProductoId(e.target.value)}
-          className="mt-1.5 w-full rounded-md border border-borde px-3 py-2 text-sm text-texto focus:border-precio focus:outline-none focus:ring-1 focus:ring-precio"
+    <form onSubmit={onSubmit} className="max-w-xl space-y-6">
+      <Tarjeta className="space-y-5 p-5">
+        <Campo
+          etiqueta="Slug"
+          htmlFor="pagina-slug"
+          ayuda="Se normaliza solo: minúsculas, sin espacios ni acentos. El link queda en /pagos/<slug>."
         >
-          <option value="">Elegí un producto…</option>
-          {productos.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.nombre} — {Number(p.precio).toFixed(2)} {p.moneda.toUpperCase()}
-            </option>
-          ))}
-        </select>
-      </label>
+          <input
+            id="pagina-slug"
+            type="text"
+            required
+            value={slug}
+            onChange={(e) => setSlug(e.target.value)}
+            placeholder="agua-de-arroz"
+            className={clasesControl('font-mono')}
+          />
+        </Campo>
 
-      <fieldset className="block">
-        <legend className="text-sm font-medium text-texto">Tipo</legend>
-        <div className="mt-1.5 flex gap-4">
-          <label className="flex items-center gap-2 text-sm text-texto">
-            <input type="radio" name="tipo" checked={tipo === 'front'} onChange={() => setTipo('front')} />
-            Front (checkout completo)
-          </label>
-          <label className="flex items-center gap-2 text-sm text-texto">
-            <input type="radio" name="tipo" checked={tipo === 'upsell'} onChange={() => setTipo('upsell')} />
-            Upsell (cobro one-click)
-          </label>
-        </div>
-      </fieldset>
+        <Campo etiqueta="Producto" htmlFor="pagina-producto">
+          <select
+            id="pagina-producto"
+            required
+            value={productoId}
+            onChange={(e) => setProductoId(e.target.value)}
+            className={clasesControl()}
+          >
+            <option value="">Elegí un producto…</option>
+            {productos.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.nombre} · {Number(p.precio).toFixed(2)} {p.moneda.toUpperCase()}
+              </option>
+            ))}
+          </select>
+        </Campo>
 
-      <label className="block">
-        <span className="block text-sm font-medium text-texto">URL de éxito (opcional)</span>
-        <input
-          type="text"
-          value={urlExito}
-          onChange={(e) => setUrlExito(e.target.value)}
-          placeholder="https://elfunnel.com/upsell1"
-          className="mt-1.5 w-full rounded-md border border-borde px-3 py-2 text-sm text-texto focus:border-precio focus:outline-none focus:ring-1 focus:ring-precio"
-        />
-      </label>
-
-      <label className="block">
-        <span className="block text-sm font-medium text-texto">URL de rechazo (opcional)</span>
-        <input
-          type="text"
-          value={urlRechazo}
-          onChange={(e) => setUrlRechazo(e.target.value)}
-          placeholder="https://elfunnel.com/rechazado"
-          className="mt-1.5 w-full rounded-md border border-borde px-3 py-2 text-sm text-texto focus:border-precio focus:outline-none focus:ring-1 focus:ring-precio"
-        />
-      </label>
-
-      <div className="rounded-lg border border-borde p-4">
-        <h2 className="text-sm font-semibold text-texto">Configuración visual</h2>
-        <div className="mt-3 space-y-4">
-          <label className="block">
-            <span className="block text-sm font-medium text-texto">
-              Minutos del timer (vacío = sin timer)
-            </span>
-            <input
-              type="number"
-              min={0}
-              value={timerMinutos}
-              onChange={(e) => setTimerMinutos(e.target.value)}
-              className="mt-1.5 w-32 rounded-md border border-borde px-3 py-2 text-sm text-texto focus:border-precio focus:outline-none focus:ring-1 focus:ring-precio"
+        <fieldset>
+          <legend className="mb-1.5 text-[13px] font-medium text-tinta">Tipo</legend>
+          <div className="flex gap-2">
+            <OpcionRadio
+              name="tipo"
+              value="front"
+              checked={tipo === 'front'}
+              onChange={() => setTipo('front')}
+              titulo="Front"
+              descripcion="Checkout completo"
             />
-          </label>
+            <OpcionRadio
+              name="tipo"
+              value="upsell"
+              checked={tipo === 'upsell'}
+              onChange={() => setTipo('upsell')}
+              titulo="Upsell"
+              descripcion="Cobro one-click"
+            />
+          </div>
+        </fieldset>
 
-          <label className="block">
-            <span className="block text-sm font-medium text-texto">Texto del botón</span>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Campo etiqueta="URL de éxito" htmlFor="pagina-exito" opcional>
             <input
+              id="pagina-exito"
               type="text"
-              value={textoBoton}
-              onChange={(e) => setTextoBoton(e.target.value)}
-              placeholder="COMPRAR AHORA"
-              className="mt-1.5 w-full rounded-md border border-borde px-3 py-2 text-sm text-texto focus:border-precio focus:outline-none focus:ring-1 focus:ring-precio"
+              value={urlExito}
+              onChange={(e) => setUrlExito(e.target.value)}
+              placeholder="https://elfunnel.com/upsell1"
+              className={clasesControl()}
             />
-          </label>
+          </Campo>
 
-          <label className="flex items-center gap-2 text-sm text-texto">
+          <Campo etiqueta="URL de rechazo" htmlFor="pagina-rechazo" opcional>
             <input
-              type="checkbox"
-              checked={badgeSeguro}
-              onChange={(e) => setBadgeSeguro(e.target.checked)}
+              id="pagina-rechazo"
+              type="text"
+              value={urlRechazo}
+              onChange={(e) => setUrlRechazo(e.target.value)}
+              placeholder="https://elfunnel.com/rechazado"
+              className={clasesControl()}
             />
-            Mostrar la barra &quot;100% SEGURO&quot;
-          </label>
+          </Campo>
+        </div>
+      </Tarjeta>
 
-          <label className="block">
-            <span className="block text-sm font-medium text-texto">Subtítulo (opcional)</span>
+      <Tarjeta className="p-5">
+        <h2 className="text-[13px] font-semibold text-tinta">Lo que ve el comprador</h2>
+        <p className="mt-1 text-[12px] leading-relaxed text-tinta-3">
+          Estos cuatro campos son lo único configurable de la página de checkout.
+        </p>
+
+        <div className="mt-5 space-y-5">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Campo
+              etiqueta="Minutos del timer"
+              htmlFor="pagina-timer"
+              ayuda="Vacío = sin barra de urgencia."
+            >
+              <input
+                id="pagina-timer"
+                type="number"
+                min={0}
+                value={timerMinutos}
+                onChange={(e) => setTimerMinutos(e.target.value)}
+                className={clasesControl('font-mono tabular-nums')}
+              />
+            </Campo>
+
+            <Campo
+              etiqueta="Texto del botón"
+              htmlFor="pagina-boton"
+              ayuda="Vacío = COMPRAR AHORA."
+            >
+              <input
+                id="pagina-boton"
+                type="text"
+                value={textoBoton}
+                onChange={(e) => setTextoBoton(e.target.value)}
+                placeholder="COMPRAR AHORA"
+                className={clasesControl()}
+              />
+            </Campo>
+          </div>
+
+          <Campo etiqueta="Subtítulo" htmlFor="pagina-subtitulo" opcional>
             <input
+              id="pagina-subtitulo"
               type="text"
               value={subtitulo}
               onChange={(e) => setSubtitulo(e.target.value)}
-              className="mt-1.5 w-full rounded-md border border-borde px-3 py-2 text-sm text-texto focus:border-precio focus:outline-none focus:ring-1 focus:ring-precio"
+              className={clasesControl()}
             />
-          </label>
-        </div>
-      </div>
+          </Campo>
 
-      {error && (
-        <p role="alert" className="text-sm text-urgencia">
+          <div className="flex items-start justify-between gap-4 rounded-ctrl border border-panel-borde bg-panel-sup2/50 px-3.5 py-3">
+            <div className="min-w-0">
+              <label htmlFor="pagina-badge" className="text-[13px] font-medium text-tinta">
+                Barra &quot;100% SEGURO&quot;
+              </label>
+              <p className="mt-0.5 text-[12px] leading-relaxed text-tinta-3">
+                Va arriba de la ficha del producto, debajo del timer.
+              </p>
+            </div>
+            <Interruptor
+              id="pagina-badge"
+              activo={badgeSeguro}
+              onCambiar={setBadgeSeguro}
+              etiquetaAccesible="Mostrar la barra 100% SEGURO"
+            />
+          </div>
+        </div>
+      </Tarjeta>
+
+      {error ? (
+        <p role="alert" className="text-[13px] font-medium text-peligro">
           No se pudo guardar ({error}).
         </p>
-      )}
+      ) : null}
 
-      <button
-        type="submit"
-        disabled={enviando}
-        className="rounded-md bg-comprar px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-comprar-oscuro disabled:opacity-50"
-      >
-        {enviando ? 'Guardando…' : editando ? 'Guardar cambios' : 'Crear link de pago'}
-      </button>
+      <div className={unir('flex items-center gap-2')}>
+        <Boton type="submit" variante="primario" tamano="lg" disabled={enviando}>
+          {enviando ? 'Guardando…' : editando ? 'Guardar cambios' : 'Crear link de pago'}
+        </Boton>
+      </div>
     </form>
   );
 }

@@ -12,6 +12,7 @@
  * contra 127.0.0.1 sin pasar por Caddy, autenticado con `CRON_SECRET`.
  */
 import { NextResponse } from 'next/server';
+import { cronAutorizado } from '@/lib/cron';
 import { mandarEmailDeEntrega } from '@/lib/email';
 import {
   armarPayloadIngest,
@@ -32,12 +33,10 @@ const TIMEOUT_PANEL_MS = 5_000;
 type Resultado = { tomadas: number; enviadas: number; fallidas: number; omitidas: number };
 
 export async function GET(req: Request): Promise<Response> {
-  const secret = process.env.CRON_SECRET;
-  const auth = req.headers.get('authorization');
-
   // Sin CRON_SECRET configurado, 401 y no "pasa igual": un cron que nadie
   // puede autenticar todavía es mejor que uno que cualquiera puede disparar.
-  if (!secret || auth !== `Bearer ${secret}`) {
+  // La regla vive en `lib/cron.ts`, compartida con los otros dos crons.
+  if (!cronAutorizado(req)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 

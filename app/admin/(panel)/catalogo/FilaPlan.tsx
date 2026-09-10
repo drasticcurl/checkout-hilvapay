@@ -2,7 +2,15 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
+import { ArrowsClockwise, Warning } from '@phosphor-icons/react/ssr';
 import type { PlanDelCatalogo } from '../../../../lib/admin/catalogo';
+import {
+  Boton,
+  Codigo,
+  EstadoVivo,
+  Insignia,
+  clasesBoton,
+} from '@/components/panel/ui';
 import { FormularioVincular } from './FormularioVincular';
 
 type Props = {
@@ -25,38 +33,37 @@ export function FilaPlan({ plan, whopProductId, nombreSoft }: Props): JSX.Elemen
   const esRenewal = plan.plan_type !== 'one_time';
 
   return (
-    <li className="border-b border-borde px-4 py-3 last:border-0">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
+    <li className="border-b border-panel-borde px-4 py-3.5 last:border-0">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0 flex-1 space-y-1.5">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-semibold text-texto">
+            <span className="font-mono text-sm font-semibold tabular-nums text-tinta">
               {plan.precio} {plan.moneda.toUpperCase()}
             </span>
-            <span
-              className={`rounded px-1.5 py-0.5 text-xs font-medium ${
-                esRenewal ? 'bg-urgencia/10 text-urgencia' : 'bg-gray-100 text-texto-suave'
-              }`}
+            <Insignia
+              tono={esRenewal ? 'peligro' : 'neutro'}
+              icono={esRenewal ? <ArrowsClockwise size={11} aria-hidden="true" /> : undefined}
             >
               {plan.plan_type}
-            </span>
-            {plan.visibility ? (
-              <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-texto-suave">
-                {plan.visibility}
-              </span>
-            ) : null}
+            </Insignia>
+            {plan.visibility ? <Insignia tono="neutro">{plan.visibility}</Insignia> : null}
           </div>
-          <code className="mt-0.5 block truncate text-xs text-texto-suave">{plan.plan_id}</code>
+
+          <Codigo className="block max-w-full truncate">{plan.plan_id}</Codigo>
 
           {esRenewal ? (
-            <p className="mt-1 text-xs font-medium text-urgencia">
-              Este plan es una suscripción: Whop le va a cobrar de nuevo al comprador el período
-              siguiente, solo, sin que este checkout intervenga. Si querés un pago único, cambialo en el
-              dashboard de Whop antes de vincularlo.
-            </p>
+            <div className="flex gap-2 rounded-ctrl border border-peligro-borde bg-peligro-suave px-3 py-2">
+              <Warning size={15} className="mt-px shrink-0 text-peligro" aria-hidden="true" />
+              <p className="text-[12px] leading-relaxed text-peligro-oscuro">
+                Este plan es una suscripción: Whop le va a cobrar de nuevo al comprador el período
+                siguiente, solo, sin que este checkout intervenga. Si querés un pago único, cambialo en
+                el dashboard de Whop antes de vincularlo.
+              </p>
+            </div>
           ) : null}
 
           {plan.huerfano ? (
-            <p className="mt-1 text-xs text-texto-suave">
+            <p className="text-[12px] leading-relaxed text-tinta-3">
               No está atado a ningún producto de Whop. Un plan así no admite códigos de descuento.
             </p>
           ) : null}
@@ -64,37 +71,31 @@ export function FilaPlan({ plan, whopProductId, nombreSoft }: Props): JSX.Elemen
 
         <div className="shrink-0">
           {plan.vinculado ? (
-            <div className="text-right text-sm">
-              <p className="font-medium text-texto">{plan.vinculado.nombre}</p>
+            <div className="space-y-1.5 text-right">
+              <p className="text-[13px] font-medium text-tinta">{plan.vinculado.nombre}</p>
               {plan.vinculado.paginas.length === 0 ? (
-                <p className="text-xs text-texto-suave">vinculado, sin link todavía</p>
+                <p className="text-[12px] text-tinta-3">Vinculado, sin link todavía</p>
               ) : (
-                <ul className="text-xs">
+                <ul className="space-y-1">
                   {plan.vinculado.paginas.map((pg) => (
-                    <li key={pg.slug} className="text-texto-suave">
-                      /pagos/{pg.slug}{' '}
-                      <span className={pg.activo ? 'font-medium text-comprar' : ''}>
-                        {pg.activo ? 'activo' : 'apagado'}
-                      </span>
+                    <li key={pg.slug} className="flex items-center justify-end gap-2">
+                      <span className="font-mono text-[12px] text-tinta-2">/pagos/{pg.slug}</span>
+                      <EstadoVivo activo={pg.activo} />
                     </li>
                   ))}
                 </ul>
               )}
               <Link
                 href={`/admin/productos/${plan.vinculado.producto_id}`}
-                className="text-xs font-medium text-precio hover:underline"
+                className={clasesBoton('secundario', 'sm')}
               >
-                Editar
+                Editar producto
               </Link>
             </div>
           ) : abierto ? null : (
-            <button
-              type="button"
-              onClick={() => setAbierto(true)}
-              className="rounded-md border border-comprar px-3 py-1.5 text-sm font-semibold text-comprar transition-colors hover:bg-comprar hover:text-white"
-            >
+            <Boton variante="primario" tamano="sm" onClick={() => setAbierto(true)}>
               Vincular
-            </button>
+            </Boton>
           )}
         </div>
       </div>

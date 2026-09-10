@@ -167,7 +167,7 @@ export function CheckoutContainer({
       {config.timerMinutos ? <Timer minutos={config.timerMinutos} /> : null}
       {config.badgeSeguro !== false ? <BadgeSeguro /> : null}
 
-      <div className="flex flex-col gap-4 px-4 pb-6 pt-4">
+      <div className="flex flex-col gap-5 px-4 pb-8 pt-5">
         <CardProducto
           nombre={producto.nombre}
           imagenUrl={producto.imagenUrl}
@@ -178,7 +178,7 @@ export function CheckoutContainer({
         />
 
         {esRecuperacion ? (
-          <p className="rounded-md bg-blue-50 px-3 py-2 text-sm text-texto">
+          <p className="rounded-lg border border-precio/25 bg-precio/5 px-3.5 py-3 text-[13px] leading-relaxed text-texto">
             Tu banco necesita que confirmes esta compra. Ingresá los datos de tu tarjeta una vez más para completarla.
           </p>
         ) : (
@@ -197,9 +197,10 @@ export function CheckoutContainer({
             onError={(msg) => setMensajeError(msg)}
           />
         ) : (
-          // El esqueleto que se ve mientras faltan datos: misma caja azul que
-          // va a tener el embed, para que al montarse no salte el layout.
-          <div className="whop-checkout-wrapper rounded-lg border border-precio px-3 py-2">
+          // El esqueleto que se ve mientras faltan datos: MISMA caja que va a
+          // tener el embed —mismo borde de 2px, mismo padding, mismo radio— para
+          // que al montarse no salte el layout.
+          <div className="whop-checkout-wrapper rounded-lg border-2 border-precio px-3.5 py-3">
             <div className="flex h-32 items-center justify-center">
               <span
                 className="h-6 w-6 animate-spin rounded-full border-2 border-borde border-t-precio"
@@ -210,7 +211,14 @@ export function CheckoutContainer({
           </div>
         )}
 
-        {mensajeError ? <p className="text-sm text-urgencia" role="alert">{mensajeError}</p> : null}
+        {mensajeError ? (
+          <p
+            className="rounded-lg border border-urgencia/25 bg-urgencia/5 px-3.5 py-3 text-[13px] leading-relaxed text-urgencia"
+            role="alert"
+          >
+            {mensajeError}
+          </p>
+        ) : null}
 
         <BotonComprar
           texto={config.textoBoton ?? 'COMPRAR AHORA'}
@@ -223,8 +231,13 @@ export function CheckoutContainer({
             link roto en un checkout es peor que no tenerlo. Los términos que sí
             aplican al cobro los muestra el embed de Whop adentro del iframe
             (`hideTermsAndConditions` en false, que es donde vive el
-            consentimiento para guardar la tarjeta). */}
-        <p className="mt-6 text-center text-[11px] leading-relaxed text-gray-400">
+            consentimiento para guardar la tarjeta).
+
+            En la referencia este texto es casi invisible (gris ~2.5:1). Acá va en
+            `texto-suave` (4.8:1): es la letra chica de una compra, y letra chica
+            de una compra que no se puede leer es un problema legal, no una
+            decisión de diseño. Sigue siendo lo más tenue de la página. */}
+        <p className="mt-8 text-center text-[11px] leading-relaxed text-texto-suave">
           Al concluir tu compra, aceptás los Términos de Uso y la Política de Privacidad.
         </p>
       </div>

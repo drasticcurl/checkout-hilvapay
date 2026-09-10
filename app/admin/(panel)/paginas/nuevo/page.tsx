@@ -1,4 +1,12 @@
+import Link from 'next/link';
+import { Package } from '@phosphor-icons/react/ssr';
 import { listarProductos } from '../../../../../lib/admin/productos';
+import {
+  EncabezadoPantalla,
+  EstadoVacio,
+  clasesBoton,
+} from '../../../../../components/panel/ui';
+import { Volver } from '../../../../../components/panel/Volver';
 import { FormularioPagina } from '../FormularioPagina';
 
 /**
@@ -21,15 +29,27 @@ export default async function NuevaPaginaPage(): Promise<JSX.Element> {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold text-texto">Nuevo link de pago</h1>
+      <Volver href="/admin">Links de pago</Volver>
+      <EncabezadoPantalla
+        titulo="Nuevo link de pago"
+        descripcion="Nace apagado. Se enciende desde el switch de la lista, cuando ya lo probaste."
+      />
       {productos.length === 0 ? (
-        <p className="text-sm text-texto-suave">
-          Todavía no hay productos. Creá uno primero en{' '}
-          <a href="/admin/productos/nuevo" className="text-precio hover:underline">
-            /admin/productos/nuevo
-          </a>
-          .
-        </p>
+        <EstadoVacio
+          icono={<Package size={20} aria-hidden="true" />}
+          titulo="Falta un producto"
+          descripcion="Un link de pago cobra un producto, y el producto es el que sabe qué plan de Whop tocar. Creá uno primero."
+          accion={
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Link href="/admin/catalogo" className={clasesBoton('primario', 'md')}>
+                Vincular desde el catálogo
+              </Link>
+              <Link href="/admin/productos/nuevo" className={clasesBoton('secundario', 'md')}>
+                Cargarlo a mano
+              </Link>
+            </div>
+          }
+        />
       ) : (
         <FormularioPagina productos={productos} />
       )}

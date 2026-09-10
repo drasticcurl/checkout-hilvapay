@@ -35,7 +35,10 @@ export const CajaTarjeta = forwardRef<ControlesTarjeta, {
     // ("Tarjeta de crédito" con el radio y el icono), y dos títulos seguidos se
     // leen como un error de la página. La caja con borde azul y el padding son
     // de este lado, que es lo único que se puede estilar del embed desde afuera.
-    <div className="whop-checkout-wrapper rounded-lg border border-precio px-3 py-2">
+    //
+    // El borde es de 2px, como en la referencia: a 1px la caja se confundía con
+    // los bordes de los inputs de arriba y dejaba de marcar "acá se paga".
+    <div className="whop-checkout-wrapper rounded-lg border-2 border-precio px-3.5 py-3">
       <WhopCheckoutEmbed
         ref={ref as never}
         sessionId={sessionId}

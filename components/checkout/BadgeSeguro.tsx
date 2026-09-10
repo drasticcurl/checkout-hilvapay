@@ -1,13 +1,23 @@
-/** La barra "🛡 100% SEGURO" de la captura de KashPay. `config.badgeSeguro` la apaga. */
+import { ShieldCheck } from '@phosphor-icons/react/ssr';
+
+/**
+ * La barra "100% SEGURO". `config.badgeSeguro` la apaga.
+ *
+ * El escudo es un SVG y no el emoji 🛡 que había antes: un emoji lo dibuja el
+ * sistema operativo, así que `text-comprar` no lo pintaba de verde —salía del
+ * color que tuviera la fuente de emoji del dispositivo, distinto en cada
+ * teléfono— y encima cambiaba de forma entre Android y iOS. Un sello de
+ * seguridad que se ve distinto en cada visita no tranquiliza a nadie.
+ *
+ * Alineado a la IZQUIERDA y en texto oscuro, no centrado y gris: es el primer
+ * elemento que se lee después del timer. La línea de abajo lo separa de la ficha
+ * del producto, igual que en el checkout de referencia.
+ */
 export function BadgeSeguro() {
   return (
-    // Alineado a la IZQUIERDA y en texto oscuro, no centrado y gris: es el
-    // primer elemento que se lee después del timer, y un sello de seguridad
-    // apagado no tranquiliza a nadie. La línea de abajo separa esta barra de la
-    // ficha del producto, igual que en el checkout que se está reemplazando.
-    <div className="flex items-center gap-1.5 border-b border-borde px-4 py-2.5 text-xs font-bold text-texto">
-      <span className="text-comprar" aria-hidden="true">🛡</span>
-      <span>100% SEGURO</span>
+    <div className="flex items-center gap-2 border-b border-borde px-4 py-2.5">
+      <ShieldCheck size={16} weight="fill" className="shrink-0 text-comprar-boton" aria-hidden="true" />
+      <span className="text-[13px] font-bold tracking-[0.01em] text-texto">100% SEGURO</span>
     </div>
   );
 }

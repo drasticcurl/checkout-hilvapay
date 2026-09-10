@@ -1,5 +1,8 @@
 'use client';
 
+import { Check, FlagCheckered } from '@phosphor-icons/react/ssr';
+import { Dialogo } from '@/components/panel/Dialogo';
+import { Boton, unir } from '@/components/panel/ui';
 import type { PasoEditor } from './FormularioPaso';
 
 type Props = {
@@ -13,57 +16,72 @@ type Props = {
 
 /**
  * El selector de destino de una rama: a qué paso va, o "Terminar en la página
- * de gracias" (`null`). Se abre al tocar el chip rojo o el chip verde de una
- * tarjeta de upsell.
+ * de gracias" (`null`). Se abre al tocar una de las dos ramas de un upsell.
+ *
+ * La opción elegida se marca con un tilde y borde de acento — no solo con color
+ * de texto, que a 12px es una diferencia que se puede pasar por alto.
  */
+function Opcion({
+  elegida,
+  onClick,
+  icono,
+  children,
+}: {
+  elegida: boolean;
+  onClick: () => void;
+  icono?: React.ReactNode;
+  children: React.ReactNode;
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-current={elegida ? 'true' : undefined}
+      className={unir(
+        'flex w-full items-center gap-2 rounded-ctrl border px-3 py-2 text-left text-[13px]',
+        'transition-[border-color,background-color] duration-150',
+        elegida
+          ? 'border-acento bg-acento-suave font-medium text-acento-oscuro'
+          : 'border-panel-bordeFuerte bg-panel-sup text-tinta hover:border-tinta-4 hover:bg-panel-sup2',
+      )}
+    >
+      {icono ? <span className="shrink-0 text-tinta-3">{icono}</span> : null}
+      <span className="min-w-0 flex-1 truncate">{children}</span>
+      {elegida ? <Check size={14} weight="bold" className="shrink-0" aria-hidden="true" /> : null}
+    </button>
+  );
+}
+
 export function SelectorDestino({ pasos, indiceOrigen, valorActual, onElegir, onCancelar }: Props): JSX.Element {
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Elegir destino"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+    <Dialogo
+      titulo="¿A dónde va?"
+      descripcion="El paso al que se manda al comprador después de esta rama."
+      onCerrar={onCancelar}
+      ancho="sm"
+      pie={
+        <Boton variante="fantasma" onClick={onCancelar}>
+          Cerrar
+        </Boton>
+      }
     >
-      <div className="w-full max-w-sm rounded-lg bg-white p-5 shadow-xl">
-        <h2 className="text-base font-semibold text-texto">¿A dónde va?</h2>
-        <ul className="mt-3 space-y-1">
-          <li>
-            <button
-              type="button"
-              onClick={() => onElegir(null)}
-              className={`w-full rounded-md border px-3 py-2 text-left text-sm ${
-                valorActual == null ? 'border-precio bg-precio/5 font-medium text-precio' : 'border-borde text-texto hover:bg-gray-50'
-              }`}
-            >
-              Terminar en la página de gracias
-            </button>
-          </li>
-          {pasos.map((p, i) =>
-            i === indiceOrigen ? null : (
-              <li key={i}>
-                <button
-                  type="button"
-                  onClick={() => onElegir(i)}
-                  className={`w-full rounded-md border px-3 py-2 text-left text-sm ${
-                    valorActual === i ? 'border-precio bg-precio/5 font-medium text-precio' : 'border-borde text-texto hover:bg-gray-50'
-                  }`}
-                >
-                  {p.nombre || p.producto.nombre || `Paso ${i}`}
-                </button>
-              </li>
-            ),
-          )}
-        </ul>
-        <div className="mt-4 flex justify-end">
-          <button
-            type="button"
-            onClick={onCancelar}
-            className="rounded-md px-3 py-2 text-sm font-medium text-texto-suave hover:bg-gray-100"
-          >
-            Cerrar
-          </button>
-        </div>
+      <div className="space-y-1.5">
+        <Opcion
+          elegida={valorActual == null}
+          onClick={() => onElegir(null)}
+          icono={<FlagCheckered size={14} aria-hidden="true" />}
+        >
+          Terminar en la página de gracias
+        </Opcion>
+        {pasos.map((p, i) =>
+          i === indiceOrigen ? null : (
+            <Opcion key={i} elegida={valorActual === i} onClick={() => onElegir(i)}>
+              <span className="font-mono text-[12px] text-tinta-3">{i + 1}</span>{' '}
+              {p.nombre || p.producto.nombre || `Paso ${i}`}
+            </Opcion>
+          ),
+        )}
       </div>
-    </div>
+    </Dialogo>
   );
 }

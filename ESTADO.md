@@ -1,6 +1,7 @@
 # ESTADO — checkout propio sobre Whop (hilvapay)
 
-Última actualización: **2026-09-10**.
+Última actualización: **2026-09-10** (reconciliación de cobros, alertas por Telegram, health check real
+y pantalla de números).
 
 Este archivo es la foto del proyecto: qué es, qué está hecho, qué falta y qué hay que saber para no
 romperlo. Si algo de acá no coincide con la realidad, la realidad tiene razón: corregí el archivo.
@@ -41,7 +42,8 @@ Este servicio cobra y redirige; no sirve contenido de marketing.
 | Base | `hilvapay` (+ `hilvapay_test` para el deploy), rol `hilvapay`, Postgres 16 nativo |
 | Credencial de la base | `/root/.hilvapay-db-url` (chmod 600) |
 | Repo | `github.com/drasticcurl/checkout-hilvapay` (privado, deploy key de solo lectura) |
-| Cron | `* * * * *` drena la cola `salidas`; log en `/var/log/hilvapay/salidas.log` |
+| Crons | `* * * * *` drena `salidas` · `*/10` reconcilia cobros · `*/15` vigila y avisa. Logs en `/var/log/hilvapay/` |
+| Health | `GET /api/health` — base, migraciones y env vars. Es lo que dispara el rollback del deploy |
 | Deploy | `sudo -u deploy bash /srv/hilvapay/repo/deploy/deploy.sh` |
 
 **Los dos dominios apuntan al mismo proceso** y se separan en `middleware.ts` por
@@ -60,6 +62,115 @@ y no expone ni la pantalla de login.
 | Plan del upsell | `plan_r0bQAmFITt6aU` — 37.00 usd, `one_time`, "Acceso Vip 30 Días" |
 | Planes huérfanos | `plan_sARwY0XsFUbAg`, `plan_5t3JLH0wp9o7c` — sin producto, **no usar** |
 | Emails de Whop | **apagados** (`send_customer_emails: false`) |
+
+### Un pago que ya existe en la cuenta
+
+Verificado el 2026-09-10 con `GET /payments`: la cuenta tiene **un** pago, hecho por **KashPay**
+(`metadata.kashpay_checkout_id`) sobre el plan huérfano `plan_sARwY0XsFUbAg`. No salió de este
+checkout. La reconciliación lo ignora correctamente porque su metadata no tiene `orden_id` — está
+cubierto por test para que nadie lo "arregle" aflojando el emparejamiento.
+
+Y dos diferencias entre la doc de Whop y la API real, medidas ese mismo día sobre
+`Api-Version-Date: 2026-08-21-1`:
+
+| La doc dice | La API devuelve |
+|---|---|
+| `plan_id` plano en la fila del listado | `plan: {id, ...}` anidado. **`plan_id` no existe** |
+| montos como objetos `{amount, currency}` | `settlement_amount` no aparece en el listado |
+
+Por eso el listado se usa **solo para identificar** un pago, y el estado se lee siempre con
+`GET /payments/{id}`, cuya forma sí está verificada. Está comentado en `PagoListado` (`lib/whop.ts`).
+
+---
+
+## 2.bis Reconciliación y alertas (nuevo, 2026-09-10)
+
+Tres agujeros que estaban abiertos y ya no:
+
+### El cobro colgado
+
+`GET /api/cron/reconciliar`, cada 10 minutos. Le pregunta a Whop por los cobros que quedaron en
+`creando` o `procesando` y los cierra.
+
+**Por qué hacía falta:** un cobro se resolvía solo por el polling del browser o por el webhook, y las
+dos vías fallan juntas en el mismo caso. El polling necesita la pestaña abierta y además **sale
+temprano cuando el cobro no tiene `whop_payment_id`** ("no hay nada que consultar") — que es justo el
+caso del 409 indeterminado y del timeout, donde es más probable que le hayamos cobrado a alguien y
+perdido la respuesta. Quedaba el webhook como única red, y Whop deshabilita un endpoint que falla 72 h
+sin reenviar lo de ese período. Alcanzaba una caída del webhook para que un cobro pagado se quedara en
+`procesando` para siempre: sin email de entrega, sin evento al panel, sin nada que lo dijera.
+
+Dos barridos, los dos round-robin por `cobros.revisado_at` y acotados a 20 cobros por corrida:
+
+| Barrido | Qué hace |
+|---|---|
+| Sin resolver | Con `whop_payment_id`: `GET /payments/{id}` y `aplicarEstadoDePago`. Sin él: lista los pagos recientes y busca el que tenga nuestro `metadata.orden_id` |
+| Pagados | Relee los cobros pagados sin reembolso para detectar reembolsos y disputas **sin depender del webhook** |
+
+El emparejamiento de un huérfano (`emparejar`, 15 tests) es deliberadamente conservador: matchea por
+`checkout_configuration_id` de la orden, o por `metadata.orden_id` + `pagina_id`, o por orden + plan.
+**Si dos pagos matchean, no toca nada** y lo deja para una persona: adivinar sería marcar como pagado
+un upsell que nadie compró.
+
+Verificado contra la API real: con un cobro huérfano sintético, el barrido listó los pagos, no
+emparejó el de KashPay y lo reportó como `sinPagoEnWhop: 1`, sin errores.
+
+### Nadie leía los errores
+
+`GET /api/cron/vigilar`, cada 15 minutos, avisa por **Telegram**. El módulo ya escribía
+`whop_eventos.error`, `salidas.ultimo_error`, `salidas.intentos` y `cobros.disputa_at`
+correctamente — y nadie los leía nunca.
+
+Qué se avisa, con los umbrales en `lib/alertas.ts`:
+
+| Alerta | Cuándo |
+|---|---|
+| `webhook_mudo` | 6 h sin webhooks **habiendo funcionado antes**, o cobros en la ventana y ni un webhook nunca |
+| `cobros_trabados` | cobros sin resolver de más de 45 min |
+| `cola_quemada` | filas de `salidas` que agotaron los 10 reintentos |
+| `cola_atascada` | cola vencida hace más de 15 min (el cron del minuto no corre) |
+| `eventos_con_error` | eventos de Whop sin procesar |
+| `disputa:<id>` / `reembolso:<id>` / `venta:<id>` | una vez por cobro |
+
+**Las dos reglas que hacen que el canal sirva:**
+
+1. **Un sistema nuevo y sin tráfico no alerta nada.** Un bot que arranca gritando es un bot que nadie
+   vuelve a mirar. Está cubierto por test.
+2. **Cada alerta tiene ventana de silencio** (`alertas.clave` es la PK). Sin eso, un problema abierto
+   manda 96 mensajes por día y a la tercera alguien silencia el bot — peor que no tener alertas,
+   porque ahora hay un canal en el que nadie confía.
+
+Y la regla de seguridad: **si no se pudo avisar, la alerta no se marca como enviada.** Se reintenta en
+la corrida siguiente. Verificado: con el token sin configurar, `detectadas: 2, mandadas: 0,
+sinCanal: 2` y la tabla `alertas` vacía.
+
+El alta es por el propio bot (`/alta <código>`, `/baja`, `/id`, `/estado`) o a mano desde
+`/admin/alertas`. `TELEGRAM_CHAT_ID_ADMIN` recibe siempre y no se puede borrar desde el panel: es el
+piso que evita que un DELETE deje al sistema sin nadie a quien avisarle.
+
+### El health check no chequeaba nada
+
+`deploy.sh` pegaba a `http://127.0.0.1:3020/`, que sirve `app/page.tsx`: **una página estática que
+devuelve 200 con Postgres caído, con las migraciones sin correr y con la `WHOP_API_KEY` vacía.** El
+rollback automático estaba verificando que Node hubiera arrancado.
+
+Ahora `GET /api/health` chequea `select 1`, que las cuatro migraciones estén aplicadas y que las env
+vars críticas existan, y devuelve **503** si algo falta. Con `Authorization: Bearer $CRON_SECRET`
+agrega el detalle de qué falta; sin el bearer no lo expone. Nunca imprime el valor de una variable.
+
+No le pega a la API de Whop a propósito: un health check que depende de un tercero convierte una caída
+de Whop en un rollback nuestro que no arregla nada.
+
+### Las pantallas nuevas del panel
+
+| Pantalla | Qué contesta |
+|---|---|
+| `/admin/numeros` | bruto, neto, aprobación, conversión del checkout y take-rate por paso del funnel, en 24 h / 7 d / 30 d. Todo sale de `cobros`, no de Whop |
+| `/admin/alertas` | quién recibe los avisos y si de verdad le están llegando (no es lo mismo: se puede tener el switch prendido y haber bloqueado el bot) |
+| `/admin/cobros` | ahora muestra **reembolsos y disputas**, que se escribían y no se leían en ninguna pantalla |
+
+El nav pasó de 6 a 8 ítems, así que la barra de una línea ahora arranca en `xl` (1280px) y no en `lg`:
+a 1024px los ocho no entran. Abajo de eso se usa la fila con scroll horizontal que ya existía.
 
 ---
 
@@ -129,6 +240,53 @@ Los productos y páginas que existen están en la base **local**. En producción
 
 ---
 
+### 3.7 El bot de Telegram no está creado
+
+El código está y funciona; falta el token. Cuatro variables, todas documentadas en `.env.example`:
+
+| Variable | Para qué | Sin ella |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | @BotFather → `/newbot` | el vigilante detecta y **no puede avisar** (queda en el log) |
+| `TELEGRAM_CHAT_ID_ADMIN` | el chat que recibe siempre | nadie recibe hasta que alguien se dé de alta |
+| `TELEGRAM_WEBHOOK_SECRET` | autentica a Telegram contra nosotros | `POST /api/telegram/webhook` responde **404** y el bot no contesta |
+| `TELEGRAM_CODIGO_REGISTRO` | el código de `/alta` | el alta por el bot queda deshabilitada; hay que cargar los chats a mano |
+
+Después del deploy, registrar el webhook una sola vez:
+
+```bash
+curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+  -d "url=https://pay.hilvanapp.com/api/telegram/webhook" \
+  -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
+```
+
+Y probarlo con el botón **Mandar una prueba** de `/admin/alertas`. Ojo con el modo de falla más común:
+**Telegram no permite que un bot escriba primero.** Quien no le haya mandado `/start` al bot recibe un
+403 y su fila se pone en pausa sola (el panel lo muestra y explica qué hacer).
+
+### 3.8 Los crons nuevos hay que instalarlos en la VPS
+
+El crontab no se instala con el deploy:
+
+```bash
+sudo mkdir -p /var/log/hilvapay && sudo chown deploy:deploy /var/log/hilvapay
+crontab -u deploy /srv/hilvapay/repo/deploy/cron.hilvapay
+crontab -u deploy -l          # confirmar las TRES líneas
+```
+
+Y sigue faltando un `/etc/logrotate.d/hilvapay`: `salidas.log` son ~525k líneas por año.
+
+### 3.9 El login del panel no tiene freno de fuerza bruta
+
+`/api/checkout/sesion` tiene rate limit por IP (20/min) y `/api/admin/login` **no tiene ninguno**. Un
+password único, cookie de 7 días, y ese panel puede prender un link que cobra tarjetas reales.
+Postergado a propósito mientras sea un MVP de un solo usuario.
+
+### 3.10 No hay backups de la base
+
+Ningún `pg_dump` en ningún cron. En `ordenes` están los emails de los compradores y los ids de Whop.
+
+---
+
 ## 4. Lo que hay que saber para no romperlo
 
 ### 4.1 Cuatro endpoints de Whop que NO sirven para verificar
@@ -176,7 +334,10 @@ crea ninguna fila en `cobros`**, aunque el paso siga encendido.
 lib/estado-pago.ts        44 tests dependen de su comportamiento exacto
 lib/whop-webhook.ts       15 tests, y la clave del HMAC es literal (ver 4.2)
 lib/funnels.ts            22 tests; decide a dónde va el comprador DESPUÉS de cobrar
+lib/reconciliacion.ts     `emparejar` tiene 15 tests. Aflojar una regla de matcheo
+                          marca como pagado un upsell que nadie compró
 db/migrations/001_init.sql   YA CORRIÓ. Una columna nueva va en una migración nueva
+db/migrations/00{2,3,4}.sql  ídem: ya corrieron
 ```
 
 En la VPS: **`/etc/caddy/Caddyfile` tiene bloques que no viven en ningún repo**
@@ -207,6 +368,10 @@ así. Todos con su test o su verificación.
 | **El crontab tenía `%{http_code}`** y en un crontab el `%` se traduce a salto de línea: el comando se cortaba ahí | revisando el archivo antes de instalarlo |
 | **El panel espera CENTAVOS enteros** (`value_cents`, `bigint`) y los importes están en unidades. `1234567.89 * 100` da `123456788.99999999`: truncar pierde un centavo | probándolo en node |
 | **El embed salía negro** sobre la página blanca: el default es `theme: 'system'` y seguía el modo del sistema del visitante | usándolo |
+| **El health check del deploy no chequeaba nada.** Pegaba a `/`, que es una página estática: 200 con Postgres caído, con las migraciones sin correr y con la API key vacía. El rollback automático verificaba que Node hubiera arrancado | leyendo qué ruta usaba |
+| **El polling no puede rescatar el peor caso.** `GET /api/cobros/[id]` sale temprano si el cobro no tiene `whop_payment_id` — que es exactamente el estado que deja un 409 indeterminado o un timeout, o sea el caso donde es más probable que le hayamos cobrado a alguien y perdido la respuesta | siguiendo los caminos de resolución de un cobro colgado |
+| **`plan_id` no existe en el listado de pagos de Whop.** La doc lo muestra plano; la API con `Api-Version-Date: 2026-08-21-1` lo devuelve anidado como `plan: {id}`. Un emparejamiento que leyera `plan_id` habría fallado siempre, en silencio y solo para el cobro del front | pidiéndole `GET /payments` a la API real y mirando las claves |
+| **Reembolsos y disputas se escribían y no se leían.** El webhook llenaba `reembolsado_at` y `disputa_at` correctamente, y ninguna pantalla del panel los seleccionaba: entraba un contracargo y no se veía en ningún lado | buscando dónde se mostraba `disputa_at` |
 
 ---
 
@@ -234,8 +399,8 @@ Están en `tasks/checkout-whop/00-PLAN-CHECKOUT-WHOP.md` §10, con su formato co
 ## 7. Números
 
 ```
-173 tests en 11 archivos · tsc exit 0 · next build compila
-3 migraciones, idempotentes · 12 afirmaciones de esquema en verde
-38 rutas · 2 dominios sobre 1 proceso
-0 cobros reales · 0 webhooks recibidos
+218 tests en 13 archivos · tsc exit 0 · next build compila
+4 migraciones, idempotentes · 12 afirmaciones de esquema en verde
+49 rutas · 2 dominios sobre 1 proceso · 3 crons
+0 cobros reales · 0 webhooks recibidos · 0 alertas mandadas (falta el bot)
 ```

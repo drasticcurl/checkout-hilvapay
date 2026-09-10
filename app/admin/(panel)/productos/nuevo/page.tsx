@@ -1,9 +1,15 @@
+import { EncabezadoPantalla } from '../../../../../components/panel/ui';
+import { Volver } from '../../../../../components/panel/Volver';
 import { FormularioProducto } from '../FormularioProducto';
 
 export default function NuevoProductoPage(): JSX.Element {
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold text-texto">Nuevo producto</h1>
+      <Volver href="/admin/productos">Productos</Volver>
+      <EncabezadoPantalla
+        titulo="Nuevo producto"
+        descripcion="Si el plan ya existe en Whop, vincularlo desde el catálogo es más seguro: el plan_id no se tipea."
+      />
       <FormularioProducto />
     </div>
   );

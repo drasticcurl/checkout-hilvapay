@@ -173,6 +173,20 @@ export type PagoWhop = {
   payment_method: { id: string; payment_method_type: string | null } | null;
   plan: { id: string } | null;
   paid_at: string | null;
+  /**
+   * Cuándo se reembolsó y cuándo se alertó una disputa. Los dos son OPCIONALES
+   * en el tipo (`?`) y no `| null` a secas: no estaban en la lista de campos que
+   * se verificó contra la API el 2026-09-10, así que el código que los lee tiene
+   * que tolerar que no vengan.
+   *
+   * Importan porque son la única forma de ver un reembolso SIN webhook. El
+   * webhook es hoy el único que escribe `cobros.reembolsado_at`, y Whop
+   * deshabilita un endpoint que falla 72 h sin reenviar lo de ese período: sin
+   * estos dos campos, un reembolso ocurrido durante una caída del webhook no
+   * aparece nunca en el panel.
+   */
+  refunded_at?: string | null;
+  dispute_alerted_at?: string | null;
   /** true cuando Whop puede reintentar el cobro solo. Importa para no cobrar dos veces. */
   retryable: boolean;
   next_payment_attempt: string | null;
@@ -327,4 +341,112 @@ export async function listarProductosWhop(): Promise<ProductoWhop[]> {
     `/products?account_id=${encodeURIComponent(companyId())}&limit=100`,
   );
   return Array.isArray(res) ? res : (res.data ?? []);
+}
+
+/**
+ * Una fila del listado de pagos, recortada a los campos con los que se
+ * IDENTIFICA un pago. Deliberadamente no trae estado.
+ *
+ * ── La doc y la API no dicen lo mismo, otra vez ─────────────────────────────
+ * Verificado el 2026-09-10 contra `GET /payments` con `Api-Version-Date:
+ * 2026-08-21-1`. La fila del listado trae estas 46 claves:
+ *
+ *   amount_after_fees, application_fee, auto_refunded, billing_address,
+ *   billing_reason, card_brand, card_last4, checkout_configuration_id, company,
+ *   created_at, currency, customer_phone, decline_code, dispute_alerted_at,
+ *   failure_message, id, last_payment_attempt, member, membership, metadata,
+ *   needs_tracking, next_payment_attempt, paid_at, payment_instrument,
+ *   payment_method, payment_method_type, payments_failed, plan, product,
+ *   promo_code, refundable, refunded_amount, refunded_at, retryable,
+ *   settlement_currency, shipment, shipping_address, status, substatus,
+ *   subtotal, tax_amount, tax_behavior, total, updated_at, usd_total, user,
+ *   voidable
+ *
+ * Dos diferencias con la doc pública, que muestra la versión beta:
+ *   · **`plan_id` NO existe.** El plan viene anidado: `plan: {id, ...}`. La doc
+ *     lo muestra plano. Por eso el normalizador de abajo lee las dos formas.
+ *   · **`settlement_amount` tampoco está**, y los importes son objetos
+ *     (`total: {amount, currency}`) en la doc pero acá vienen como los devuelve
+ *     esta versión. `PagoWhop` está verificado contra `GET /payments/{id}`, no
+ *     contra este endpoint.
+ *
+ * Por eso este tipo tiene solo lo mínimo: el listado se usa para averiguar QUÉ
+ * pago le corresponde a un cobro huérfano, y el estado se lee después con
+ * `obtenerPago(id)`, que sí devuelve la forma conocida. Un campo de este listado
+ * nunca decide si un cobro está pagado.
+ */
+export type PagoListado = {
+  id: string;
+  metadata: Record<string, unknown> | null;
+  /**
+   * El vínculo más fuerte para el cobro del front: se compara contra
+   * `ordenes.whop_checkout_config_id`, que tiene índice único.
+   */
+  checkout_configuration_id: string | null;
+  planId: string | null;
+  created_at: string | null;
+};
+
+/**
+ * Lista los pagos de la company, más nuevos primero.
+ *
+ * `account_id` es obligatorio igual que en `/plans` y `/products` — sin él la
+ * API responde 400 `account_id is required`.
+ *
+ * Se usa en la reconciliación para el caso peor del módulo: un cobro que quedó
+ * en `procesando` SIN `whop_payment_id`, que es lo que pasa cuando `POST
+ * /payments` se cortó a mitad de camino (409 indeterminado, timeout, red caída).
+ * Ese cobro puede haber salido de verdad, y como no tenemos el id no hay nada
+ * que consultar: la única forma de encontrarlo es listar los pagos recientes y
+ * buscar el que tenga nuestro `metadata.orden_id`.
+ *
+ * `created_after` acota la ventana para no paginar el histórico entero.
+ *
+ * Los nombres de los parámetros de query son los de la doc (`first`, no
+ * `limit`; `created_after`, no `desde`). Ojo con eso: `/plans` y `/products` de
+ * arriba usan `limit`, y mezclarlos hace que la API ignore el parámetro en
+ * silencio y devuelva su default.
+ */
+export async function listarPagos(params: {
+  creadosDespuesDe?: Date;
+  limite?: number;
+} = {}): Promise<PagoListado[]> {
+  const query = new URLSearchParams({
+    account_id: companyId(),
+    first: String(params.limite ?? 50),
+    order: 'created_at',
+    direction: 'desc',
+  });
+  if (params.creadosDespuesDe) {
+    query.set('created_after', params.creadosDespuesDe.toISOString());
+  }
+
+  const res = await whopFetch<{ data?: unknown[] } | unknown[]>(`/payments?${query.toString()}`);
+  const filas = Array.isArray(res) ? res : (res.data ?? []);
+
+  return filas
+    .map((cruda) => {
+      const p = cruda as Record<string, unknown>;
+      const id = typeof p.id === 'string' ? p.id : null;
+      if (!id) return null;
+      // `plan: {id}` en esta versión (verificado), `plan_id` plano en la doc de
+      // la beta. Se leen las dos formas: la doc de Whop ya fue inconsistente
+      // antes con `payt_`/`pmt_`, y una lectura que soporta ambas no se rompe
+      // cuando la unifiquen en cualquier dirección.
+      const plan = p.plan as { id?: unknown } | null | undefined;
+      return {
+        id,
+        metadata: (p.metadata as Record<string, unknown> | null) ?? null,
+        checkout_configuration_id:
+          typeof p.checkout_configuration_id === 'string' ? p.checkout_configuration_id : null,
+        planId:
+          typeof plan?.id === 'string'
+            ? plan.id
+            : typeof p.plan_id === 'string'
+              ? p.plan_id
+              : null,
+        created_at: typeof p.created_at === 'string' ? p.created_at : null,
+      } satisfies PagoListado;
+    })
+    .filter((p): p is PagoListado => p !== null);
 }

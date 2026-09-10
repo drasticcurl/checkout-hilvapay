@@ -176,9 +176,16 @@ install -m 600 "$SHARED/.env.production" "$RELEASE/.env.production"
 #
 # WHOP_WEBHOOK_SECRET NO está acá a propósito: sin ella el webhook rechaza
 # todo con 400, que es el fallo seguro (Whop reintenta, no se pierde nada) y
-# no una razón para frenar el deploy. PANEL_INGEST_URL/KEY, RESEND_API_KEY y
-# PANEL_SESSION_SECRET tampoco: el servicio anda sin ellas (omite el reporte
-# al panel, no manda el email de entrega, o cae a PANEL_PASSWORD respectivamente).
+# no una razón para frenar el deploy — y desde que existe /api/cron/reconciliar,
+# los cobros se cierran igual sin webhook, 10 minutos más tarde.
+# PANEL_INGEST_URL/KEY, RESEND_API_KEY y PANEL_SESSION_SECRET tampoco: el
+# servicio anda sin ellas (omite el reporte al panel, no manda el email de
+# entrega, o cae a PANEL_PASSWORD respectivamente).
+#
+# ESTA LISTA TIENE QUE COINCIDIR con `ENV_CRITICAS` de app/api/health/route.ts.
+# Si el health check fuera más estricto, el deploy pasaría este guard, arrancaría,
+# y después el paso 8 lo revertiría por una variable que acá se decidió no exigir:
+# un rollback en loop por una diferencia de criterio entre dos archivos.
 REQUIRED=(
   DATABASE_URL
   WHOP_API_KEY
@@ -330,22 +337,37 @@ fi
 ok=0
 for _ in $(seq 1 20); do
   sleep 2
-  # GET / de este servicio devuelve 200 con "Nada por acá" (app/page.tsx): es
-  # la única ruta pública que no depende de estado. /admin da 307 (redirect a
-  # login del middleware, y encima está detrás de PANEL_HOST); /pagos/... da
-  # 404 si el link está apagado, que es el estado normal en producción — un
-  # health check contra esa ruta fallaría con la app sana.
-  code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3020/ || true)"
+  # `/api/health` y NO `/`.
+  #
+  # `GET /` devuelve 200 con "Nada por acá" (app/page.tsx): es una página
+  # estática, así que responde 200 **con Postgres caído, con las migraciones sin
+  # correr y con la WHOP_API_KEY vacía**. O sea: el rollback automático de acá
+  # abajo estaba verificando que Node hubiera arrancado, y nada más.
+  #
+  # `/api/health` chequea `select 1`, que las migraciones esperadas estén
+  # aplicadas y que las env vars críticas existan, y devuelve 503 si algo falta.
+  # No le pega a la API de Whop a propósito: un health check que depende de un
+  # tercero convierte una caída de Whop en un rollback nuestro que no arregla nada.
+  #
+  # Las otras rutas siguen sin servir para esto: `/admin` da 307 (redirect a
+  # login, y encima está detrás de PANEL_HOST) y `/pagos/...` da 404 si el link
+  # está apagado, que es el estado normal en producción.
+  code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3020/api/health || true)"
   [[ "$code" == "200" ]] && { ok=1; break; }
 done
 if ((!ok)); then
-  log "hilvapay no respondió 200 en / (último código: ${code:-sin respuesta})"
+  log "hilvapay no respondió 200 en /api/health (último código: ${code:-sin respuesta})"
+  # El cuerpo dice QUÉ falta (con el bearer del CRON_SECRET trae el detalle), y
+  # sale al log del deploy antes del rollback: sin esto hay que adivinar si fue
+  # la base, una migración o una variable.
+  SECRET_HEALTH="$(sed -n 's/^CRON_SECRET=//p' "$SHARED/.env.production" 2>/dev/null | head -n1 | tr -d '"'"'"'[:space:]')"
+  log "diagnóstico: $(curl -s -m 5 -H "Authorization: Bearer ${SECRET_HEALTH:-}" http://127.0.0.1:3020/api/health || echo 'sin respuesta')"
   rollback_to_previous
   fail "deploy revertido"
 fi
 
 pm2 save --force >/dev/null
-log "hilvapay arriba (${code} en /)"
+log "hilvapay arriba (${code} en /api/health)"
 
 # ─── 9. Poda: deja las 5 releases más nuevas ────────────────────────────────
 # Nunca borrar la release que está sirviendo: después de un rollback a una

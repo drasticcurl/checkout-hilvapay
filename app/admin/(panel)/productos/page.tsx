@@ -1,5 +1,21 @@
+/**
+ * `/admin/productos` — los productos locales, cada uno atado a un plan de Whop.
+ * El nombre es el que ve el comprador; en Whop el plan puede llamarse distinto.
+ */
 import Link from 'next/link';
+import { Package, Plus } from '@phosphor-icons/react/ssr';
 import { listarProductos } from '../../../../lib/admin/productos';
+import {
+  Codigo,
+  EncabezadoPantalla,
+  EstadoVacio,
+  EstadoVivo,
+  TablaEnvoltorio,
+  Td,
+  Th,
+  Tr,
+  clasesBoton,
+} from '../../../../components/panel/ui';
 import { SwitchActivo } from '../SwitchActivo';
 
 export const dynamic = 'force-dynamic';
@@ -9,61 +25,77 @@ export default async function ProductosPage(): Promise<JSX.Element> {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-texto">Productos</h1>
-        <Link
-          href="/admin/productos/nuevo"
-          className="rounded-md bg-comprar px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-comprar-oscuro"
-        >
-          Nuevo producto
-        </Link>
-      </div>
+      <EncabezadoPantalla
+        titulo="Productos"
+        descripcion="Cada producto apunta a un plan de Whop, que es lo que decide cuánto se cobra de verdad."
+        acciones={
+          productos.length === 0 ? undefined : (
+            <Link href="/admin/productos/nuevo" className={clasesBoton('primario', 'md')}>
+              <Plus size={15} weight="bold" aria-hidden="true" />
+              Nuevo producto
+            </Link>
+          )
+        }
+      />
 
       {productos.length === 0 ? (
-        <p className="text-sm text-texto-suave">Todavía no hay productos.</p>
+        <EstadoVacio
+          icono={<Package size={20} aria-hidden="true" />}
+          titulo="Ningún producto cargado"
+          descripcion="Lo más rápido es vincularlo desde el catálogo de Whop: así el plan_id nunca se tipea a mano, y por lo tanto no se puede tipear mal."
+          accion={
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Link href="/admin/catalogo" className={clasesBoton('primario', 'md')}>
+                Vincular desde el catálogo
+              </Link>
+              <Link href="/admin/productos/nuevo" className={clasesBoton('secundario', 'md')}>
+                Cargarlo a mano
+              </Link>
+            </div>
+          }
+        />
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-borde">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-borde bg-gray-50 text-texto-suave">
-              <tr>
-                <th className="px-4 py-2 font-medium">Nombre</th>
-                <th className="px-4 py-2 font-medium">Plan de Whop</th>
-                <th className="px-4 py-2 font-medium">Precio</th>
-                <th className="px-4 py-2 font-medium">Activo</th>
-                <th className="px-4 py-2 font-medium" />
-              </tr>
-            </thead>
-            <tbody>
-              {productos.map((p) => (
-                <tr key={p.id} className="border-b border-borde last:border-0">
-                  <td className="px-4 py-3 text-texto">{p.nombre}</td>
-                  <td className="px-4 py-3">
-                    <code className="text-xs text-texto-suave">{p.whop_plan_id}</code>
-                  </td>
-                  <td className="px-4 py-3 text-texto">
-                    {Number(p.precio).toFixed(2)} {p.moneda.toUpperCase()}
-                  </td>
-                  <td className="px-4 py-3">
+        <TablaEnvoltorio>
+          <thead>
+            <tr>
+              <Th>Nombre</Th>
+              <Th>Plan de Whop</Th>
+              <Th numerica>Precio</Th>
+              <Th>Estado</Th>
+              <Th className="text-right">Editar</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {productos.map((p) => (
+              <Tr key={p.id}>
+                <Td className="max-w-[20rem] truncate font-medium">{p.nombre}</Td>
+                <Td>
+                  <Codigo className="max-w-[16rem] truncate">{p.whop_plan_id}</Codigo>
+                </Td>
+                <Td numerica className="whitespace-nowrap text-tinta-2">
+                  {Number(p.precio).toFixed(2)} {p.moneda.toUpperCase()}
+                </Td>
+                <Td>
+                  <div className="flex items-center gap-3">
                     <SwitchActivo
                       id={p.id}
                       activo={p.activo}
                       endpoint="/api/admin/productos"
-                      mensajeConfirmacion={`¿Activar "${p.nombre}"? Los links de pago que lo usen van a poder empezar a cobrarlo.`}
+                      etiqueta={`"${p.nombre}"`}
+                      mensajeConfirmacion={`Los links de pago que usen "${p.nombre}" van a poder empezar a cobrarlo.`}
                     />
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <Link
-                      href={`/admin/productos/${p.id}`}
-                      className="text-sm font-medium text-precio hover:underline"
-                    >
-                      Editar
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                    <EstadoVivo activo={p.activo} />
+                  </div>
+                </Td>
+                <Td className="text-right">
+                  <Link href={`/admin/productos/${p.id}`} className={clasesBoton('secundario', 'sm')}>
+                    Editar
+                  </Link>
+                </Td>
+              </Tr>
+            ))}
+          </tbody>
+        </TablaEnvoltorio>
       )}
     </div>
   );

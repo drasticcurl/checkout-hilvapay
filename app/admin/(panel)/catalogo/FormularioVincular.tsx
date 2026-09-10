@@ -9,12 +9,14 @@
  * Por qué el `plan_id` no es un campo editable: es el dato que decide QUÉ se
  * cobra, y tipearlo a mano es cómo un link termina cobrando el producto de otro
  * paso del funnel sin ningún síntoma visible. Viene de la lista que trajo la API
- * y viaja en un hidden.
+ * y viaja en el body sin pasar por un input.
  */
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { Warning } from '@phosphor-icons/react/ssr';
 import type { PlanDelCatalogo } from '../../../../lib/admin/catalogo';
+import { Boton, Campo, clasesControl } from '@/components/panel/ui';
 
 type Props = {
   plan: PlanDelCatalogo;
@@ -75,97 +77,113 @@ export function FormularioVincular({ plan, whopProductId, nombreSoft, onCancelar
   }
 
   return (
-    <form onSubmit={enviar} className="mt-3 space-y-3 rounded-md border border-borde bg-gray-50 p-4">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block text-sm">
-          <span className="mb-1 block font-medium text-texto">Nombre que ve el comprador</span>
+    <form
+      onSubmit={enviar}
+      className="mt-4 animate-aparecer-abajo space-y-4 rounded-card border border-panel-borde bg-panel-sup2/50 p-4"
+    >
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Campo
+          etiqueta="Nombre que ve el comprador"
+          htmlFor="vincular-nombre"
+          ayuda={
+            nombreSoft && nombre !== nombreSoft
+              ? `En Whop se llama "${nombreSoft}". Está bien que difieran.`
+              : undefined
+          }
+        >
           <input
+            id="vincular-nombre"
             value={nombre}
             onChange={(e) => setNombre(e.target.value)}
             required
             minLength={2}
-            className="w-full rounded-md border border-borde px-3 py-2 text-sm"
+            className={clasesControl()}
           />
-          {nombreSoft && nombre !== nombreSoft ? (
-            <span className="mt-1 block text-xs text-texto-suave">
-              En Whop se llama “{nombreSoft}”. Está bien que difieran.
-            </span>
-          ) : null}
-        </label>
+        </Campo>
 
-        <label className="block text-sm">
-          <span className="mb-1 block font-medium text-texto">Slug del link</span>
+        <Campo
+          etiqueta="Slug del link"
+          htmlFor="vincular-slug"
+          ayuda={
+            <>
+              El link va a ser{' '}
+              <span className="font-mono text-tinta-2">
+                /pagos/{slug ? slug.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-') : '…'}
+              </span>
+            </>
+          }
+        >
           <input
+            id="vincular-slug"
             value={slug}
             onChange={(e) => setSlug(e.target.value)}
             required
             placeholder="agua-de-arroz"
-            className="w-full rounded-md border border-borde px-3 py-2 text-sm"
+            className={clasesControl('font-mono')}
           />
-          <span className="mt-1 block text-xs text-texto-suave">
-            El link va a ser /pagos/{slug ? slug.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-') : '…'}
-          </span>
-        </label>
+        </Campo>
 
-        <label className="block text-sm">
-          <span className="mb-1 block font-medium text-texto">Precio que se muestra</span>
+        <Campo
+          etiqueta="Precio que se muestra"
+          htmlFor="vincular-precio"
+          ayuda={precioDifiere ? undefined : 'Coincide con lo que cobra el plan en Whop.'}
+        >
           <div className="flex items-center gap-2">
             <input
+              id="vincular-precio"
               value={precio}
               onChange={(e) => setPrecio(e.target.value)}
               required
               inputMode="decimal"
-              className="w-full rounded-md border border-borde px-3 py-2 text-sm"
+              className={clasesControl('font-mono tabular-nums')}
             />
-            <span className="text-sm text-texto-suave">{plan.moneda.toUpperCase()}</span>
+            <span className="shrink-0 text-[13px] text-tinta-3">{plan.moneda.toUpperCase()}</span>
           </div>
-          {precioDifiere ? (
-            <span className="mt-1 block text-xs font-medium text-urgencia">
-              El plan de Whop cobra {plan.precio} {plan.moneda.toUpperCase()}. Se va a mostrar {precio} y
-              cobrar {plan.precio}.
-            </span>
-          ) : (
-            <span className="mt-1 block text-xs text-texto-suave">
-              Coincide con lo que cobra el plan en Whop.
-            </span>
-          )}
-        </label>
+        </Campo>
 
-        <label className="block text-sm">
-          <span className="mb-1 block font-medium text-texto">Tipo</span>
+        <Campo etiqueta="Tipo" htmlFor="vincular-tipo">
           <select
+            id="vincular-tipo"
             value={tipo}
             onChange={(e) => setTipo(e.target.value as 'front' | 'upsell')}
-            className="w-full rounded-md border border-borde px-3 py-2 text-sm"
+            className={clasesControl()}
           >
-            <option value="front">Front — se abre en el browser</option>
-            <option value="upsell">Upsell — lo cobra el botón del funnel</option>
+            <option value="front">Front, se abre en el browser</option>
+            <option value="upsell">Upsell, lo cobra el botón del funnel</option>
           </select>
-        </label>
+        </Campo>
       </div>
 
+      {/* Fuera de la grilla: es una advertencia sobre plata y ocupa el ancho
+          completo, no la columna de un campo. */}
+      {precioDifiere ? (
+        <div className="flex gap-2.5 rounded-ctrl border border-alerta-borde bg-alerta-suave px-3.5 py-3">
+          <Warning size={16} className="mt-px shrink-0 text-alerta" aria-hidden="true" />
+          <p className="text-[13px] leading-relaxed text-alerta">
+            El plan de Whop cobra{' '}
+            <span className="font-mono font-semibold">
+              {plan.precio} {plan.moneda.toUpperCase()}
+            </span>
+            . Se va a mostrar <span className="font-mono font-semibold">{precio}</span> y cobrar{' '}
+            <span className="font-mono font-semibold">{plan.precio}</span>.
+          </p>
+        </div>
+      ) : null}
+
       {error ? (
-        <p role="alert" className="text-sm font-medium text-urgencia">
+        <p role="alert" className="text-[13px] font-medium text-peligro">
           {error}
         </p>
       ) : null}
 
-      <div className="flex items-center gap-2">
-        <button
-          type="submit"
-          disabled={enviando}
-          className="rounded-md bg-comprar px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-comprar-oscuro disabled:opacity-50"
-        >
+      <div className="flex flex-wrap items-center gap-3">
+        <Boton type="submit" variante="primario" disabled={enviando}>
           {enviando ? 'Vinculando…' : 'Vincular y crear el link'}
-        </button>
-        <button
-          type="button"
-          onClick={onCancelar}
-          className="rounded-md px-3 py-2 text-sm font-medium text-texto-suave hover:bg-gray-100"
-        >
+        </Boton>
+        <Boton variante="fantasma" onClick={onCancelar} disabled={enviando}>
           Cancelar
-        </button>
-        <span className="text-xs text-texto-suave">Nace apagado. Lo prendés desde Links de pago.</span>
+        </Boton>
+        <span className="text-[12px] text-tinta-3">Nace apagado. Lo prendés desde Links de pago.</span>
       </div>
     </form>
   );

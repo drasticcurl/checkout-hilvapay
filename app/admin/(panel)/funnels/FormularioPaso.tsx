@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import { Dialogo } from '@/components/panel/Dialogo';
+import { Boton, Campo, Interruptor, OpcionRadio, SinDato, clasesControl, unir } from '@/components/panel/ui';
 
 type ProductoSelector = { id: string; nombre: string; precio: string; moneda: string };
 
@@ -56,11 +58,6 @@ function previsualizarSlug(input: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-/**
- * El formulario de un paso: modal con los campos exactos de la captura de
- * KashPay, más el slug (que KashPay no necesita mostrar porque su editor no
- * expone `data-hilvana-upsell`, pero este checkout sí lo necesita).
- */
 export function FormularioPaso({ paso, productos, permitirFront, onGuardar, onCancelar }: Props): JSX.Element {
   const [tipo, setTipo] = useState<'front' | 'upsell'>(paso?.tipo ?? (permitirFront ? 'front' : 'upsell'));
   const [permiteRechazo, setPermiteRechazo] = useState(paso?.permite_rechazo ?? false);
@@ -125,181 +122,162 @@ export function FormularioPaso({ paso, productos, permitirFront, onGuardar, onCa
   }
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={paso ? 'Editar paso' : 'Nuevo paso'}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+    <Dialogo
+      titulo={paso ? 'Editar paso' : 'Nuevo paso'}
+      onCerrar={onCancelar}
+      pie={
+        <>
+          <Boton variante="fantasma" onClick={onCancelar}>
+            Cancelar
+          </Boton>
+          <Boton variante="primario" onClick={guardar}>
+            Guardar paso
+          </Boton>
+        </>
+      }
     >
-      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-white p-5 shadow-xl">
-        <h2 className="text-base font-semibold text-texto">{paso ? 'Editar paso' : 'Nuevo paso'}</h2>
+      {permitirFront ? (
+        <fieldset>
+          <legend className="mb-1.5 text-[13px] font-medium text-tinta">Tipo de paso</legend>
+          <div className="flex gap-2">
+            <OpcionRadio
+              name="tipo-paso"
+              value="front"
+              checked={tipo === 'front'}
+              onChange={() => setTipo('front')}
+              titulo="Producto principal"
+              descripcion="Se abre en el browser"
+            />
+            <OpcionRadio
+              name="tipo-paso"
+              value="upsell"
+              checked={tipo === 'upsell'}
+              onChange={() => setTipo('upsell')}
+              titulo="Upsell"
+              descripcion="Lo cobra el botón del funnel"
+            />
+          </div>
+        </fieldset>
+      ) : null}
 
-        {permitirFront ? (
-          <fieldset className="mt-4">
-            <legend className="text-sm font-medium text-texto">Tipo de paso</legend>
-            <div className="mt-1.5 flex gap-4">
-              <label className="flex items-center gap-2 text-sm text-texto">
-                <input
-                  type="radio"
-                  name="tipo-paso"
-                  checked={tipo === 'front'}
-                  onChange={() => setTipo('front')}
-                />
-                Producto principal
-              </label>
-              <label className="flex items-center gap-2 text-sm text-texto">
-                <input
-                  type="radio"
-                  name="tipo-paso"
-                  checked={tipo === 'upsell'}
-                  onChange={() => setTipo('upsell')}
-                />
-                Upsell
-              </label>
-            </div>
-          </fieldset>
-        ) : null}
-
-        {/* Toggle "Activar botón de rechazo". Operable con teclado: es un
-            <button role="switch">, no un div con onClick.
-
-            No se muestra en el front: ahí no hay nada que rechazar — o compra o
-            no compra. Mostrarlo invitaría a configurar un camino que el
-            resolutor ignora (ver lib/funnels.ts, `permite_rechazo`). */}
-        {esFront ? null : (
-        <div className="mt-4 flex items-start justify-between gap-3">
-          <div>
-            <label htmlFor="toggle-rechazo" className="text-sm font-medium text-texto">
+      {/* El toggle de rechazo no se muestra en el front: ahí no hay nada que
+          rechazar — o compra o no compra. Mostrarlo invitaría a configurar un
+          camino que el resolutor ignora (ver lib/funnels.ts, `permite_rechazo`). */}
+      {esFront ? null : (
+        <div className="flex items-start justify-between gap-4 rounded-ctrl border border-panel-borde bg-panel-sup2/50 px-3.5 py-3">
+          <div className="min-w-0">
+            <label htmlFor="toggle-rechazo" className="text-[13px] font-medium text-tinta">
               Activar botón de rechazo
             </label>
-            <p className="text-xs text-texto-suave">
+            <p className="mt-0.5 text-[12px] leading-relaxed text-tinta-3">
               Permite redirigir sin cobrar y habilita caminos de downsell.
             </p>
           </div>
-          <button
+          <Interruptor
             id="toggle-rechazo"
-            type="button"
-            role="switch"
-            aria-checked={permiteRechazo}
-            onClick={() => setPermiteRechazo((v) => !v)}
-            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
-              permiteRechazo ? 'bg-comprar' : 'bg-gray-300'
-            }`}
-          >
-            <span className="sr-only">Activar botón de rechazo</span>
-            <span
-              className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${
-                permiteRechazo ? 'translate-x-6' : 'translate-x-1'
-              }`}
-            />
-          </button>
+            activo={permiteRechazo}
+            onCambiar={setPermiteRechazo}
+            etiquetaAccesible="Activar botón de rechazo"
+          />
         </div>
+      )}
 
-        )}
-
-        {esFront ? null : (
-        <label className="mt-4 block" htmlFor="nombre-paso">
-          <span className="mb-1 block text-sm font-medium text-texto">Nombre de identificación</span>
+      {esFront ? null : (
+        <Campo etiqueta="Nombre de identificación" htmlFor="nombre-paso">
           <input
             id="nombre-paso"
             value={nombre}
             onChange={(e) => setNombre(e.target.value)}
             placeholder="Upsell 1"
-            className="w-full rounded-md border border-borde px-3 py-2 text-sm focus:border-precio focus:outline-none focus:ring-1 focus:ring-precio"
+            className={clasesControl()}
           />
-        </label>
+        </Campo>
+      )}
 
-        )}
+      <Campo etiqueta="Producto" htmlFor="producto-paso">
+        <select
+          id="producto-paso"
+          value={productoId}
+          onChange={(e) => setProductoId(e.target.value)}
+          className={clasesControl()}
+        >
+          <option value="">Elegí un producto…</option>
+          {productos.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.nombre}
+            </option>
+          ))}
+        </select>
+      </Campo>
 
-        <label className="mt-4 block" htmlFor="producto-paso">
-          <span className="mb-1 block text-sm font-medium text-texto">Producto</span>
-          <select
-            id="producto-paso"
-            value={productoId}
-            onChange={(e) => setProductoId(e.target.value)}
-            className="w-full rounded-md border border-borde px-3 py-2 text-sm focus:border-precio focus:outline-none focus:ring-1 focus:ring-precio"
-          >
-            <option value="">Elegí un producto…</option>
-            {productos.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.nombre}
-              </option>
-            ))}
-          </select>
-        </label>
+      {/* Solo lectura: el precio sale de productos.precio, no se edita acá. Un
+          <output> y no un <input disabled>: no es un valor de formulario, es
+          información derivada. */}
+      <div className="space-y-1.5">
+        <span className="block text-[13px] font-medium text-tinta">Oferta</span>
+        <output
+          className={unir(
+            'block rounded-ctrl border border-panel-borde bg-panel-sup2 px-3 py-2',
+            'font-mono text-sm tabular-nums text-tinta',
+          )}
+        >
+          {producto ? formatearPrecio(producto.precio, producto.moneda) : <SinDato />}
+        </output>
+      </div>
 
-        <div className="mt-4">
-          <span className="mb-1 block text-sm font-medium text-texto">Oferta</span>
-          {/* Solo lectura: el precio sale de productos.precio, no se edita acá
-              (regla explícita del task). Un <output> y no un <input disabled>:
-              no es un valor de formulario, es información derivada. */}
-          <output className="block rounded-md border border-borde bg-gray-50 px-3 py-2 text-sm text-texto">
-            {producto ? formatearPrecio(producto.precio, producto.moneda) : '—'}
-          </output>
-        </div>
+      {tipo === 'upsell' ? (
+        <Campo
+          etiqueta="URL de la página externa"
+          htmlFor="url-externa-paso"
+          ayuda="Página donde el cliente verá la oferta."
+        >
+          <input
+            id="url-externa-paso"
+            value={urlExterna}
+            onChange={(e) => setUrlExterna(e.target.value)}
+            placeholder="https://elfunnel.com/upsell1"
+            className={clasesControl()}
+          />
+        </Campo>
+      ) : null}
 
-        {tipo === 'upsell' ? (
-          <label className="mt-4 block" htmlFor="url-externa-paso">
-            <span className="mb-1 block text-sm font-medium text-texto">URL de la página externa</span>
-            <input
-              id="url-externa-paso"
-              value={urlExterna}
-              onChange={(e) => setUrlExterna(e.target.value)}
-              placeholder="https://elfunnel.com/upsell1"
-              className="w-full rounded-md border border-borde px-3 py-2 text-sm focus:border-precio focus:outline-none focus:ring-1 focus:ring-precio"
-            />
-            <span className="mt-1 block text-xs text-texto-suave">Página donde el cliente verá la oferta.</span>
-          </label>
-        ) : null}
-
-        {esFront ? (
-          <p className="mt-4 rounded-md bg-gray-50 p-3 text-xs text-texto-suave">
-            El link de pago se va a llamar{' '}
-            <code className="text-texto">
-              {base}/pagos/{producto ? previsualizarSlug(producto.nombre) : '…'}
-            </code>
-            , derivado del nombre del producto. Si querés otro, cambiale el nombre en Productos.
-          </p>
-        ) : (
-        <label className="mt-4 block" htmlFor="slug-paso">
-          <span className="mb-1 block text-sm font-medium text-texto">Slug</span>
+      {esFront ? (
+        <p className="rounded-ctrl border border-panel-borde bg-panel-sup2/50 px-3.5 py-3 text-[12px] leading-relaxed text-tinta-2">
+          El link de pago se va a llamar{' '}
+          <span className="font-mono text-tinta">
+            {base}/pagos/{producto ? previsualizarSlug(producto.nombre) : '…'}
+          </span>
+          , derivado del nombre del producto. Si querés otro, cambiale el nombre en Productos.
+        </p>
+      ) : (
+        <Campo
+          etiqueta="Slug"
+          htmlFor="slug-paso"
+          ayuda={
+            <>
+              Es lo que el botón del funnel pone en{' '}
+              <span className="font-mono text-tinta-2">data-hilvana-upsell</span>:{' '}
+              <span className="font-mono text-tinta-2">
+                {base}/pagos/{slugNormalizado || '…'}
+              </span>
+            </>
+          }
+        >
           <input
             id="slug-paso"
             value={slug}
             onChange={(e) => setSlug(e.target.value)}
             placeholder="upsell-1"
-            className="w-full rounded-md border border-borde px-3 py-2 font-mono text-sm focus:border-precio focus:outline-none focus:ring-1 focus:ring-precio"
+            className={clasesControl('font-mono')}
           />
-          <span className="mt-1 block text-xs text-texto-suave">
-            Es lo que el botón del funnel pone en <code>data-hilvana-upsell</code>:{' '}
-            <code>{base}/pagos/{slugNormalizado || '…'}</code>
-          </span>
-        </label>
-        )}
+        </Campo>
+      )}
 
-        {error ? (
-          <p role="alert" className="mt-3 text-sm font-medium text-urgencia">
-            {error}
-          </p>
-        ) : null}
-
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancelar}
-            className="rounded-md px-3 py-2 text-sm font-medium text-texto-suave hover:bg-gray-100"
-          >
-            Cancelar
-          </button>
-          <button
-            type="button"
-            onClick={guardar}
-            className="rounded-md bg-comprar px-3 py-2 text-sm font-semibold text-white hover:bg-comprar-oscuro"
-          >
-            Guardar
-          </button>
-        </div>
-      </div>
-    </div>
+      {error ? (
+        <p role="alert" className="text-[13px] font-medium text-peligro">
+          {error}
+        </p>
+      ) : null}
+    </Dialogo>
   );
 }

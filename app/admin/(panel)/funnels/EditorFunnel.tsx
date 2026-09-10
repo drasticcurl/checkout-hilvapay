@@ -2,7 +2,26 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import {
+  ArrowElbowDownRight,
+  CaretRight,
+  Check,
+  FlagCheckered,
+  PencilSimple,
+  Plus,
+  Warning,
+} from '@phosphor-icons/react/ssr';
 import type { FunnelConPasos } from '../../../../lib/admin/funnels';
+import { Dialogo } from '@/components/panel/Dialogo';
+import {
+  Aviso,
+  Boton,
+  Campo,
+  Insignia,
+  SinDato,
+  clasesControl,
+  unir,
+} from '@/components/panel/ui';
 import { FormularioPaso, type PasoEditor } from './FormularioPaso';
 import { SelectorDestino } from './SelectorDestino';
 
@@ -36,14 +55,20 @@ function pasosAEditor(funnel: FunnelConPasos | null): PasoEditor[] {
 }
 
 /**
- * El editor visual: una pila vertical de tarjetas, de arriba hacia abajo. Cada
- * paso conoce su índice en el array `pasos`, y las flechas (`paso_*_indice`) son
- * índices dentro de ese mismo array — no ids, porque un paso nuevo todavía no
- * tiene id hasta que se guarda. El backend resuelve los índices a ids reales
- * dentro de la transacción (ver `guardarFunnel`).
+ * El editor visual: una pila vertical de pasos sobre un riel, de arriba hacia
+ * abajo. Cada paso conoce su índice en el array `pasos`, y las flechas
+ * (`paso_*_indice`) son índices dentro de ese mismo array — no ids, porque un
+ * paso nuevo todavía no tiene id hasta que se guarda. El backend resuelve los
+ * índices a ids reales dentro de la transacción (ver `guardarFunnel`).
  *
- * No hay drag & drop ni SVG: KashPay tampoco lo tiene, y una pila con ramas
- * etiquetadas alcanza para leer el flujo de un vistazo.
+ * No hay drag & drop ni SVG de nodos arrastrables: una pila con un riel y ramas
+ * etiquetadas alcanza para leer el flujo de un vistazo, y el orden es la posición
+ * en el array, que es lo único que `orden` significa en la migración 003.
+ *
+ * Qué determina el dibujo de cada paso: su `tipo`, no su posición. El paso
+ * `front` muestra "compra completada" debajo; los `upsell` muestran sus dos
+ * ramas. Antes eso se decidía por `indice === 0`, y un funnel a medio armar con
+ * el front en el medio dejaba las ramas de un upsell fuera de alcance.
  */
 export function EditorFunnel({ funnel, productos }: Props): JSX.Element {
   const router = useRouter();
@@ -130,88 +155,137 @@ export function EditorFunnel({ funnel, productos }: Props): JSX.Element {
 
   return (
     <div className="max-w-2xl space-y-6">
-      <div className="flex items-center justify-between gap-3">
-        <label className="block flex-1">
-          <span className="sr-only">Nombre del funnel</span>
+      <div className="flex flex-col gap-4 rounded-card border border-panel-borde bg-panel-sup p-4 shadow-panel sm:flex-row sm:items-end">
+        <Campo etiqueta="Nombre del funnel" htmlFor="nombre-funnel" className="min-w-0 flex-1">
           <input
+            id="nombre-funnel"
             value={nombre}
             onChange={(e) => setNombre(e.target.value)}
-            className="w-full rounded-md border border-borde px-3 py-2 text-lg font-semibold text-texto focus:border-precio focus:outline-none focus:ring-1 focus:ring-precio"
+            className={clasesControl('font-medium', 'lg')}
           />
-        </label>
+        </Campo>
         <div className="flex shrink-0 gap-2">
-          <button
-            type="button"
-            onClick={descartar}
-            className="rounded-md px-3 py-2 text-sm font-medium text-texto-suave hover:bg-gray-100"
-          >
+          <Boton variante="fantasma" tamano="lg" onClick={descartar} disabled={guardando}>
             Descartar
-          </button>
-          <button
-            type="button"
-            onClick={guardar}
-            disabled={guardando}
-            className="rounded-md bg-comprar px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-comprar-oscuro disabled:opacity-50"
-          >
-            {guardando ? 'Guardando…' : 'Guardar'}
-          </button>
+          </Boton>
+          <Boton variante="primario" tamano="lg" onClick={() => void guardar()} disabled={guardando}>
+            {guardando ? 'Guardando…' : 'Guardar funnel'}
+          </Boton>
         </div>
       </div>
 
       {error ? (
-        <p role="alert" className="rounded-md border border-urgencia/30 bg-urgencia/5 p-3 text-sm text-urgencia">
+        <Aviso tono="peligro" rol="alert" icono={<Warning size={16} aria-hidden="true" />}>
           {error}
-        </p>
+        </Aviso>
       ) : null}
 
-      <div className="space-y-3">
-        {pasos.map((paso, indice) => (
-          <div key={indice}>
-            {indice === 0 ? (
-              <TarjetaProductoPrincipal paso={paso} onEditar={() => setEditandoIndice(indice)} />
-            ) : (
-              <TarjetaUpsell
-                paso={paso}
-                indice={indice}
-                onEditar={() => setEditandoIndice(indice)}
-              />
-            )}
+      {/* El lienzo punteado marca dónde termina el formulario y empieza el flujo.
+          Es la única textura del panel y sirve para eso, no para decorar. */}
+      <div className="lienzo-flujo rounded-card border border-panel-borde bg-panel-sup p-5 shadow-panel">
+        {pasos.length === 0 ? (
+          <p className="py-6 text-center text-[13px] text-tinta-2">
+            El funnel está vacío. Empezá por el producto principal: es la oferta que abre la cadena.
+          </p>
+        ) : (
+          <ol className="space-y-0">
+            {pasos.map((paso, indice) => {
+              const esFront = paso.tipo === 'front';
+              return (
+                <li key={indice} className="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-x-3">
+                  {/* Riel: el nodo y la línea que baja al siguiente paso. La línea
+                      es `flex-1` para que mida exactamente lo que mide la fila. */}
+                  <div className="flex flex-col items-center">
+                    <span
+                      className={unir(
+                        'flex h-7 w-7 shrink-0 items-center justify-center rounded-full',
+                        'font-mono text-[12px] font-medium tabular-nums',
+                        esFront
+                          ? 'bg-tinta text-white'
+                          : 'border border-panel-bordeFuerte bg-panel-sup text-tinta-2',
+                      )}
+                      aria-hidden="true"
+                    >
+                      {indice + 1}
+                    </span>
+                    <span className="mt-1 w-px flex-1 bg-panel-bordeFuerte" />
+                  </div>
 
-            {indice === 0 ? (
-              <div className="my-3 flex justify-center">
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-texto">
-                  <span className="h-2 w-2 rounded-full bg-comprar" aria-hidden />
-                  Compra completada por el cliente
-                </span>
-              </div>
-            ) : (
-              <RamasDelPaso
-                paso={paso}
-                pasos={pasos}
-                onAbrirRama={(rama) => setRamaAbierta({ indice, rama })}
-                onAgregarDownsell={() => setEditandoIndice('nuevo')}
-              />
-            )}
+                  <div className="min-w-0 pb-5">
+                    {esFront ? (
+                      <TarjetaProductoPrincipal paso={paso} onEditar={() => setEditandoIndice(indice)} />
+                    ) : (
+                      <TarjetaUpsell
+                        paso={paso}
+                        indice={indice}
+                        onEditar={() => setEditandoIndice(indice)}
+                      />
+                    )}
+
+                    {esFront ? (
+                      <p className="mt-2.5 inline-flex items-center gap-1.5 text-[12px] font-medium text-vivo-oscuro">
+                        <Check size={13} weight="bold" aria-hidden="true" />
+                        Compra completada por el cliente
+                      </p>
+                    ) : (
+                      <RamasDelPaso
+                        paso={paso}
+                        pasos={pasos}
+                        onAbrirRama={(rama) => setRamaAbierta({ indice, rama })}
+                        onAgregarDownsell={() => setEditandoIndice('nuevo')}
+                      />
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+
+        {/* Cierre del riel: el mismo carril, con el botón de agregar y el destino
+            final del funnel. */}
+        <div className="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-x-3">
+          <div className="flex justify-center">
+            <button
+              type="button"
+              onClick={() => setEditandoIndice('nuevo')}
+              aria-label="Agregar paso"
+              className={unir(
+                'flex h-7 w-7 items-center justify-center rounded-full border border-dashed',
+                'border-panel-bordeFuerte bg-panel-sup text-tinta-3 transition-colors duration-150',
+                'hover:border-acento hover:bg-acento-suave hover:text-acento',
+              )}
+            >
+              <Plus size={13} weight="bold" aria-hidden="true" />
+            </button>
           </div>
-        ))}
-      </div>
-
-      <div className="flex flex-col items-center gap-3 border-t border-borde pt-6">
-        <button
-          type="button"
-          onClick={() => setEditandoIndice('nuevo')}
-          aria-label="Agregar paso"
-          className="flex h-10 w-10 items-center justify-center rounded-full border-2 border-dashed border-borde text-xl text-texto-suave transition-colors hover:border-comprar hover:text-comprar"
-        >
-          +
-        </button>
-        <button
-          type="button"
-          onClick={() => setEditandoGracias(true)}
-          className="rounded-md border border-borde px-3 py-2 text-sm font-medium text-texto hover:bg-gray-100"
-        >
-          Página de gracias{urlGracias ? ': ' + urlGracias : ''}
-        </button>
+          <div className="flex flex-wrap items-center gap-2 pt-0.5">
+            <Boton
+              variante="secundario"
+              tamano="sm"
+              onClick={() => setEditandoIndice('nuevo')}
+              icono={<Plus size={13} weight="bold" aria-hidden="true" />}
+            >
+              Agregar paso
+            </Boton>
+            <button
+              type="button"
+              onClick={() => setEditandoGracias(true)}
+              className={unir(
+                'inline-flex items-center gap-1.5 rounded-ctrl border border-panel-bordeFuerte bg-panel-sup',
+                'px-2.5 py-1.5 text-[13px] text-tinta-2 shadow-panel transition-colors duration-150',
+                'hover:border-tinta-4 hover:bg-panel-sup2 hover:text-tinta',
+              )}
+            >
+              <FlagCheckered size={13} aria-hidden="true" />
+              {urlGracias ? (
+                <span className="max-w-[16rem] truncate font-mono text-[12px]">{urlGracias}</span>
+              ) : (
+                'Definir página de gracias'
+              )}
+            </button>
+          </div>
+        </div>
       </div>
 
       {editandoIndice !== null ? (
@@ -272,6 +346,22 @@ function traducirError(codigo: string | undefined): string {
   }
 }
 
+/** Clases compartidas por las dos tarjetas de paso, para que hover y foco sean iguales. */
+const TARJETA_PASO =
+  'group relative block w-full rounded-card border border-panel-borde bg-panel-sup p-3.5 text-left ' +
+  'shadow-panel transition-[border-color,box-shadow] duration-150 hover:border-acento hover:shadow-panel-md';
+
+/** El lápiz aparece en hover: dice que la tarjeta entera abre el formulario. */
+function Lapiz(): JSX.Element {
+  return (
+    <PencilSimple
+      size={14}
+      aria-hidden="true"
+      className="absolute right-3.5 top-3.5 text-tinta-4 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+    />
+  );
+}
+
 function TarjetaProductoPrincipal({
   paso,
   onEditar,
@@ -280,30 +370,25 @@ function TarjetaProductoPrincipal({
   onEditar: () => void;
 }): JSX.Element {
   return (
-    <button
-      type="button"
-      onClick={onEditar}
-      className="w-full rounded-lg border border-borde p-4 text-left transition-colors hover:border-precio"
-    >
+    <button type="button" onClick={onEditar} className={TARJETA_PASO}>
+      <Lapiz />
       <div className="flex items-center gap-3">
         {paso.producto.imagen_url ? (
           // eslint-disable-next-line @next/next/no-img-element -- viene de una URL externa arbitraria, no del build
           <img
             src={paso.producto.imagen_url}
             alt=""
-            className="h-12 w-12 shrink-0 rounded-md border border-borde object-cover"
+            className="h-10 w-10 shrink-0 rounded-ctrl border border-panel-borde object-cover"
           />
         ) : null}
-        <div className="min-w-0">
-          <p className="font-semibold text-texto">{paso.producto.nombre || '—'}</p>
-          <p className="text-xs font-medium text-texto-suave">Producto principal</p>
+        <div className="min-w-0 flex-1">
+          <Insignia tono="acento">Producto principal</Insignia>
+          <p className="mt-1.5 truncate text-sm font-semibold text-tinta">
+            {paso.producto.nombre || 'Sin producto elegido'}
+          </p>
         </div>
-      </div>
-      <div className="my-3 border-t border-borde" />
-      <div className="flex items-center justify-between text-sm">
-        <span className="text-texto-suave">Oferta que dispara:</span>
-        <span className="rounded-full bg-gray-100 px-3 py-1 font-medium text-texto">
-          {paso.producto.precio ? formatearPrecio(paso.producto.precio, paso.producto.moneda) : '—'}
+        <span className="shrink-0 font-mono text-[13px] tabular-nums text-tinta-2">
+          {paso.producto.precio ? formatearPrecio(paso.producto.precio, paso.producto.moneda) : <SinDato />}
         </span>
       </div>
     </button>
@@ -320,18 +405,53 @@ function TarjetaUpsell({
   onEditar: () => void;
 }): JSX.Element {
   return (
+    <button type="button" onClick={onEditar} className={TARJETA_PASO}>
+      <Lapiz />
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <Insignia tono="neutro">{paso.nombre || `Upsell ${indice}`}</Insignia>
+          <p className="mt-1.5 truncate text-sm font-semibold text-tinta">
+            {paso.producto.nombre || 'Sin producto elegido'}
+          </p>
+        </div>
+        <span className="shrink-0 font-mono text-[13px] tabular-nums text-tinta-2">
+          {paso.producto.precio ? formatearPrecio(paso.producto.precio, paso.producto.moneda) : <SinDato />}
+        </span>
+      </div>
+    </button>
+  );
+}
+
+/** Una rama: qué pasó, y a dónde va. El destino se cambia tocándola. */
+function Rama({
+  tono,
+  que,
+  destino,
+  onClick,
+}: {
+  tono: 'vivo' | 'peligro';
+  que: string;
+  destino: string;
+  onClick: () => void;
+}): JSX.Element {
+  const tonos = {
+    vivo: 'text-vivo-oscuro hover:bg-vivo-suave',
+    peligro: 'text-peligro-oscuro hover:bg-peligro-suave',
+  };
+  return (
     <button
       type="button"
-      onClick={onEditar}
-      className="w-full rounded-lg border border-borde p-4 text-left transition-colors hover:border-precio"
+      onClick={onClick}
+      className={unir(
+        'inline-flex max-w-full items-center gap-1.5 rounded-ctrl px-1.5 py-1 text-[12px]',
+        'transition-colors duration-150',
+        tonos[tono],
+      )}
     >
-      <span className="inline-block rounded bg-comprar/10 px-2 py-0.5 text-xs font-semibold text-comprar">
-        {paso.nombre || `Upsell ${indice}`}
-      </span>
-      <p className="mt-2 font-bold text-texto">{paso.producto.nombre || '—'}</p>
-      <p className="text-sm text-texto-suave">
-        {paso.producto.precio ? formatearPrecio(paso.producto.precio, paso.producto.moneda) : '—'}
-      </p>
+      <ArrowElbowDownRight size={13} aria-hidden="true" className="shrink-0" />
+      <span className="font-medium">{que}</span>
+      <CaretRight size={10} aria-hidden="true" className="shrink-0 opacity-50" />
+      <span className="truncate text-tinta-2">{destino}</span>
     </button>
   );
 }
@@ -348,40 +468,38 @@ function RamasDelPaso({
   onAgregarDownsell: () => void;
 }): JSX.Element {
   function etiquetaDestino(indice: number | null): string {
-    if (indice == null) return 'Termina en gracias';
+    if (indice == null) return 'página de gracias';
     const destino = pasos[indice];
-    return destino ? `→ ${destino.nombre || destino.producto.nombre}` : 'Termina en gracias';
+    return destino ? destino.nombre || destino.producto.nombre : 'página de gracias';
   }
 
   return (
-    <div className="my-3 flex flex-wrap items-center justify-center gap-2 border-l-2 border-borde pl-3">
+    <div className="mt-2 flex flex-col items-start gap-0.5">
+      <Rama
+        tono="vivo"
+        que="Aceptó la oferta"
+        destino={etiquetaDestino(paso.paso_aceptado_indice)}
+        onClick={() => onAbrirRama('aceptado')}
+      />
       {/* El chip de rechazo solo existe si el paso tiene el toggle activado: un
           paso que no ofrece salida sin comprar no tiene rama de rechazo. */}
       {paso.permite_rechazo ? (
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
+        <div className="flex flex-wrap items-center gap-1">
+          <Rama
+            tono="peligro"
+            que="Rechazó el upsell"
+            destino={etiquetaDestino(paso.paso_rechazado_indice)}
             onClick={() => onAbrirRama('rechazado')}
-            className="rounded-full bg-urgencia/10 px-3 py-1 text-xs font-medium text-urgencia hover:bg-urgencia/20"
-          >
-            Rechazó el upsell · {etiquetaDestino(paso.paso_rechazado_indice)}
-          </button>
+          />
           <button
             type="button"
             onClick={onAgregarDownsell}
-            className="rounded-full border border-dashed border-borde px-2 py-1 text-xs font-medium text-texto-suave hover:border-comprar hover:text-comprar"
+            className="rounded-ctrl px-1.5 py-1 text-[12px] font-medium text-tinta-3 transition-colors duration-150 hover:bg-panel-sup2 hover:text-tinta"
           >
-            + Agregar
+            + downsell
           </button>
         </div>
       ) : null}
-      <button
-        type="button"
-        onClick={() => onAbrirRama('aceptado')}
-        className="rounded-full bg-comprar/10 px-3 py-1 text-xs font-medium text-comprar hover:bg-comprar/20"
-      >
-        Aceptó la oferta · {etiquetaDestino(paso.paso_aceptado_indice)}
-      </button>
     </div>
   );
 }
@@ -397,44 +515,31 @@ function PanelGracias({
 }): JSX.Element {
   const [v, setV] = useState(valor);
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Página de gracias"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-    >
-      <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
-        <h2 className="text-base font-semibold text-texto">Página de gracias</h2>
-        <p className="mt-1 text-sm text-texto-suave">
-          A dónde va el comprador cuando el funnel se termina y no hay más pasos configurados.
-        </p>
-        <label className="mt-3 block">
-          <span className="mb-1 block text-sm font-medium text-texto">URL de la página de gracias</span>
-          <input
-            id="url-gracias"
-            value={v}
-            onChange={(e) => setV(e.target.value)}
-            placeholder="https://elfunnel.com/gracias"
-            className="w-full rounded-md border border-borde px-3 py-2 text-sm focus:border-precio focus:outline-none focus:ring-1 focus:ring-precio"
-          />
-        </label>
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancelar}
-            className="rounded-md px-3 py-2 text-sm font-medium text-texto-suave hover:bg-gray-100"
-          >
+    <Dialogo
+      titulo="Página de gracias"
+      descripcion="A dónde va el comprador cuando el funnel se termina y no hay más pasos configurados."
+      onCerrar={onCancelar}
+      pie={
+        <>
+          <Boton variante="fantasma" onClick={onCancelar}>
             Cancelar
-          </button>
-          <button
-            type="button"
-            onClick={() => onGuardar(v)}
-            className="rounded-md bg-comprar px-3 py-2 text-sm font-semibold text-white hover:bg-comprar-oscuro"
-          >
+          </Boton>
+          <Boton variante="primario" onClick={() => onGuardar(v)}>
             Guardar
-          </button>
-        </div>
-      </div>
-    </div>
+          </Boton>
+        </>
+      }
+    >
+      <Campo etiqueta="URL de la página de gracias" htmlFor="url-gracias">
+        <input
+          id="url-gracias"
+          autoFocus
+          value={v}
+          onChange={(e) => setV(e.target.value)}
+          placeholder="https://elfunnel.com/gracias"
+          className={clasesControl()}
+        />
+      </Campo>
+    </Dialogo>
   );
 }

@@ -1,5 +1,7 @@
 import { notFound } from 'next/navigation';
 import { buscarProducto } from '../../../../../lib/admin/productos';
+import { EncabezadoPantalla } from '../../../../../components/panel/ui';
+import { Volver } from '../../../../../components/panel/Volver';
 import { FormularioProducto } from '../FormularioProducto';
 
 /**
@@ -27,7 +29,11 @@ export default async function EditarProductoPage({
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold text-texto">Editar producto</h1>
+      <Volver href="/admin/productos">Productos</Volver>
+      <EncabezadoPantalla
+        titulo={producto.nombre}
+        descripcion="Cambiar el precio de display acá no cambia lo que cobra Whop: eso lo decide el plan."
+      />
       <FormularioProducto producto={producto} />
     </div>
   );

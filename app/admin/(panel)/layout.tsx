@@ -1,41 +1,61 @@
 /**
- * Shell de las pantallas protegidas del panel: header con la navegación entre
- * las cuatro secciones y el botón de salir. Vive en el route group `(panel)`
+ * Shell de las pantallas protegidas del panel. Vive en el route group `(panel)`
  * para no envolver `/admin/login`, que es hermano de esta carpeta y no hijo.
+ *
+ * El header es sticky y translúcido: en `/admin/cobros` hay 100 filas, y perder
+ * la navegación al tercer scroll obliga a volver arriba para cambiar de sección.
+ * Mide 60px en desktop, dentro del techo de 80px.
+ *
+ * El indicador de entorno no es adorno. Dice si los interruptores de esta
+ * pantalla mueven plata de verdad o no, y es lo primero que hay que saber antes
+ * de tocar cualquiera de ellos.
  */
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { CerrarSesionButton } from './CerrarSesionButton';
-
-const LINKS = [
-  { href: '/admin', label: 'Links de pago' },
-  { href: '/admin/funnels', label: 'Funnels' },
-  { href: '/admin/catalogo', label: 'Catálogo de Whop' },
-  { href: '/admin/productos', label: 'Productos' },
-  { href: '/admin/origenes', label: 'Orígenes' },
-  { href: '/admin/cobros', label: 'Cobros' },
-];
+import { NavPanel } from '../../../components/panel/NavPanel';
+import { Insignia } from '../../../components/panel/ui';
 
 export default function PanelLayout({ children }: { children: ReactNode }): JSX.Element {
+  const enProduccion = process.env.NEXT_PUBLIC_WHOP_ENV === 'production';
+
   return (
-    <div className="min-h-screen bg-white">
-      <header className="border-b border-borde">
-        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-4 py-3">
-          <nav className="flex flex-wrap items-center gap-1" aria-label="Secciones del panel">
-            {LINKS.map((l) => (
-              <Link
-                key={l.href}
-                href={l.href}
-                className="rounded-md px-3 py-1.5 text-sm font-medium text-texto-suave transition-colors hover:bg-gray-100 hover:text-texto"
-              >
-                {l.label}
-              </Link>
-            ))}
-          </nav>
-          <CerrarSesionButton />
+    <div className="min-h-[100dvh] bg-panel-fondo">
+      <header className="sticky top-0 z-nav border-b border-panel-borde bg-panel-sup/85 backdrop-blur-md">
+        <div className="mx-auto flex h-14 max-w-panel items-center gap-5 px-4 lg:h-[60px] lg:px-6">
+          <Link
+            href="/admin"
+            className="flex shrink-0 items-center gap-2.5 rounded-ctrl"
+            aria-label="Inicio del panel"
+          >
+            {/* Marca: cuadrado con la inicial en Geist. Un monograma tipográfico,
+                no un SVG decorativo dibujado a mano. */}
+            <span
+              aria-hidden="true"
+              className="flex h-7 w-7 items-center justify-center rounded-ctrl bg-tinta text-[15px] font-semibold leading-none text-white"
+            >
+              h
+            </span>
+            <span className="hidden text-[13px] font-medium text-tinta sm:block">
+              hilvana
+              <span className="text-tinta-3"> / pagos</span>
+            </span>
+          </Link>
+
+          <NavPanel variante="escritorio" />
+
+          <div className="ml-auto flex shrink-0 items-center gap-2.5">
+            <Insignia tono={enProduccion ? 'alerta' : 'neutro'}>
+              {enProduccion ? 'producción' : 'sandbox'}
+            </Insignia>
+            <CerrarSesionButton />
+          </div>
         </div>
+
+        <NavPanel variante="mobile" />
       </header>
-      <main className="mx-auto max-w-5xl px-4 py-8">{children}</main>
+
+      <main className="mx-auto max-w-panel px-4 py-8 lg:px-6 lg:py-10">{children}</main>
     </div>
   );
 }

@@ -31,13 +31,72 @@ con Enter se conserva. Para solo re-verificar sin tocar nada: `npm run whop:veri
 
 | Comando | Qué hace |
 |---|---|
-| `npm run dev` | puerto 3010 |
+| `npm run dev` | puerto 3020 |
 | `npm run db:migrate` | aplica `db/migrations/*.sql`. Idempotente |
 | `npm run db:seed` | carga los productos y links de prueba |
 | `npm test` | vitest |
 | `npm run whop:verificar` | re-confirma la conexión con Whop, sin escribir nada |
 
 Los scripts de `tsx` van con `--env-file=.env.local`: Next carga ese archivo solo, `tsx` no.
+
+## Está sano?
+
+```bash
+curl -s localhost:3020/api/health
+# {"ok":true,"servicio":"hilvapay","base":"ok","migraciones":"ok","config":"ok"}
+```
+
+Devuelve **503** si la base no contesta, si falta una migración o si falta una variable crítica. Es lo
+que dispara el rollback automático del deploy. Con el bearer del `CRON_SECRET` dice *qué* falta:
+
+```bash
+curl -s -H "Authorization: Bearer $CRON_SECRET" localhost:3020/api/health
+```
+
+Sin el bearer no expone ese detalle, y en ningún caso imprime el valor de una variable.
+
+## Los tres crons
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" localhost:3020/api/cron/salidas
+curl -H "Authorization: Bearer $CRON_SECRET" localhost:3020/api/cron/reconciliar
+curl -H "Authorization: Bearer $CRON_SECRET" localhost:3020/api/cron/vigilar
+```
+
+| Endpoint | Cada | Qué hace |
+|---|---|---|
+| `salidas` | 1 min | drena la cola: reporta las ventas al panel y manda los emails de entrega |
+| `reconciliar` | 10 min | le pregunta a Whop por los cobros colgados y los cierra. Detecta reembolsos y disputas **sin depender del webhook** |
+| `vigilar` | 15 min | avisa por Telegram si algo se rompió |
+
+En producción los llama el crontab con `deploy/pegar-cron.sh` (ver `deploy/cron.hilvapay`).
+
+## El bot de avisos
+
+Sin bot no se pierde ninguna venta: el vigilante detecta igual y lo escribe en
+`/var/log/hilvapay/vigilar.log`. Pero es la diferencia entre enterarse de una disputa en 15 minutos y
+enterarse cuando llega el contracargo.
+
+1. @BotFather → `/newbot` → el token va en `TELEGRAM_BOT_TOKEN`.
+2. Elegí dos secretos cualesquiera: `TELEGRAM_WEBHOOK_SECRET` y `TELEGRAM_CODIGO_REGISTRO`.
+3. Hablale al bot, mandale `/id` y poné ese número en `TELEGRAM_CHAT_ID_ADMIN`.
+4. Registrá el webhook, una sola vez:
+
+```bash
+curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+  -d "url=https://pay.hilvanapp.com/api/telegram/webhook" \
+  -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
+```
+
+5. Probalo con **Mandar una prueba** en `/admin/alertas`.
+
+Para sumar a alguien más: que le mande `/alta <código>` al bot. Comandos: `/alta`, `/baja`, `/id`,
+`/estado`.
+
+> **Telegram no deja que un bot escriba primero.** Quien no le haya mandado `/start` al bot da 403 y su
+> fila se pone en pausa sola. El panel lo muestra y dice qué hacer.
+
+Los avisos de venta se apagan con `TELEGRAM_AVISAR_VENTAS=0`; las fallas no se pueden apagar.
 
 ## Estado verificado de la conexión con Whop
 

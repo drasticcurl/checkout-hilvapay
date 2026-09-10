@@ -2,7 +2,15 @@
  * `/admin/funnels/nuevo` — arranca el editor sin funnel todavía. El primer
  * guardado crea la fila; hasta entonces todo vive en el estado del cliente.
  */
+import Link from 'next/link';
+import { Package } from '@phosphor-icons/react/ssr';
 import { productosParaSelector } from '../../../../../lib/admin/funnels';
+import {
+  EncabezadoPantalla,
+  EstadoVacio,
+  clasesBoton,
+} from '../../../../../components/panel/ui';
+import { Volver } from '../../../../../components/panel/Volver';
 import { EditorFunnel } from '../EditorFunnel';
 
 export const dynamic = 'force-dynamic';
@@ -13,15 +21,22 @@ export default async function NuevoFunnelPage(): Promise<JSX.Element> {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold text-texto">Nuevo funnel</h1>
+      <Volver href="/admin/funnels">Funnels</Volver>
+      <EncabezadoPantalla
+        titulo="Nuevo funnel"
+        descripcion="Empezá por el producto principal y agregá los upsells debajo. Nada cobra hasta que lo enciendas."
+      />
       {productos.length === 0 ? (
-        <p className="text-sm text-texto-suave">
-          Todavía no hay productos vinculados. Vinculá uno primero en{' '}
-          <a href="/admin/catalogo" className="text-precio hover:underline">
-            /admin/catalogo
-          </a>
-          .
-        </p>
+        <EstadoVacio
+          icono={<Package size={20} aria-hidden="true" />}
+          titulo="Falta vincular un producto"
+          descripcion="Un paso del funnel necesita un producto con su plan de Whop detrás. Vinculá uno desde el catálogo y volvé."
+          accion={
+            <Link href="/admin/catalogo" className={clasesBoton('primario', 'md')}>
+              Ir al catálogo de Whop
+            </Link>
+          }
+        />
       ) : (
         <EditorFunnel funnel={null} productos={productos} />
       )}

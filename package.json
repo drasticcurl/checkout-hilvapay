@@ -14,7 +14,9 @@
     "whop:verificar": "./scripts/configurar-env.sh --solo-verificar"
   },
   "dependencies": {
+    "@phosphor-icons/react": "2.1.10",
     "@whop/checkout": "0.6.0",
+    "geist": "1.7.2",
     "next": "14.2.5",
     "pg": "8.23.0",
     "react": "^18",

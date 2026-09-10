@@ -19,6 +19,17 @@ export type FilaCobroPanel = {
   whop_payment_id: string | null;
   origen: 'front' | 'upsell';
   created_at: Date;
+  /**
+   * Un cobro reembolsado o disputado sigue en `status: 'pagado'` — la plata entró
+   * y después salió, y son dos hechos distintos.
+   *
+   * Estas dos columnas se escribían desde el webhook (y ahora también desde la
+   * reconciliación) y NO se leían en ninguna pantalla: entraba un contracargo y no
+   * se veía en ningún lado del panel. Un chargeback tiene plazo de respuesta, así
+   * que "está en la base" no alcanzaba.
+   */
+  reembolsado_at: Date | null;
+  disputa_at: Date | null;
   pagina_slug: string;
   producto_nombre: string;
   orden_email: string | null;
@@ -28,7 +39,8 @@ export type FilaCobroPanel = {
 export async function ultimosCobros(limite: number): Promise<FilaCobroPanel[]> {
   return q<FilaCobroPanel>(
     `select c.id, c.status, c.monto, c.moneda, c.decline_code, c.whop_payment_id, c.origen,
-            c.created_at, pg.slug as pagina_slug, pr.nombre as producto_nombre,
+            c.created_at, c.reembolsado_at, c.disputa_at,
+            pg.slug as pagina_slug, pr.nombre as producto_nombre,
             o.email as orden_email
        from cobros c
        join paginas pg on pg.id = c.pagina_id
