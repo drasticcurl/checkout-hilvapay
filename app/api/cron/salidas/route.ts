@@ -8,7 +8,8 @@
  * porque esos eventos hoy solo existen para que quede rastro en `whop_eventos`
  * y no tienen un destino de salida propio todavía.
  *
- * Declarado como cron cada minuto en `vercel.json` (lo escribió T01).
+ * Lo llama el crontab de la VPS cada minuto (ver `deploy/cron.hilvapay`),
+ * contra 127.0.0.1 sin pasar por Caddy, autenticado con `CRON_SECRET`.
  */
 import { NextResponse } from 'next/server';
 import { mandarEmailDeEntrega } from '@/lib/email';

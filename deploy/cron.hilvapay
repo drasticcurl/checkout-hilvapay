@@ -1,0 +1,68 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# cron de hilvapay — instalar con:  crontab -u deploy -
+#
+# Mismo formato que dashboard-admin/deploy/cron.panel: es un crontab de
+# USUARIO (deploy), sin el quinto campo de usuario que llevaría /etc/cron.d/.
+# Si en algún momento se instala como /etc/cron.d/hilvapay en lugar del
+# crontab de deploy, hay que agregarle `deploy` como quinto campo antes del
+# comando.
+#
+# UN SOLO CRON: drenar la cola `salidas` cada minuto. GET /api/cron/salidas,
+# autenticado con `Authorization: Bearer $CRON_SECRET`.
+#
+# ── Por qué curl a 127.0.0.1 y no tsx ───────────────────────────────────────
+# El patrón de dashboard-admin (fetch-fx.ts, rollup.ts, etc.) es tsx corriendo
+# un script que llama funciones de lib/ directo, sin pasar por HTTP. Ese
+# patrón no existe para esta cola: no hay un scripts/drenar-salidas.ts, la
+# única puerta de entrada a `tomarPendientes`/`marcarEnviada`/`marcarFallida`
+# (lib/salidas.ts) desde afuera del proceso Next es la ruta
+# app/api/cron/salidas/route.ts. Escribir un script nuevo que duplique esa
+# lógica en tsx significaría dos implementaciones del mismo drenado que se
+# pueden desincronizar — y esta tarea es solo `deploy/`, no tocar `app/` ni
+# `lib/`. Por eso la respuesta es (a): un curl a la ruta ya escrita.
+#
+# Pegarle a 127.0.0.1:3020 directo y NO a https://pay.hilvanapp.com/api/cron/
+# salidas: así el cron no depende de que Caddy o el DNS estén sanos para que
+# la cola drene, y el middleware deja pasar /api/cron/* en cualquier host (ver
+# middleware.ts, CUALQUIER_HOST) — no hace falta ni que el Host coincida con
+# PAGOS_HOST.
+#
+# ── El secreto no va en texto plano en el crontab ───────────────────────────
+# El crontab es legible por cualquiera con acceso a `crontab -u deploy -l` (y
+# queda en /var/spool/cron, con más ojos encima que shared/.env.production,
+# que es 600). CRON_SECRET protege el único endpoint no autenticado por sesión
+# que puede disparar el drenado de cobros: escribirlo literal acá sería
+# imprimirlo en un lugar con más exposición sin necesidad.
+#
+# La solución (mismo problema que resuelve cron.panel con --env-file, pero acá
+# no hay tsx de por medio): un subshell que lee CRON_SECRET del
+# .env.production vivo con `source` + `set -a`, y usa la variable ya
+# resuelta en el propio comando curl. `set -a` exporta todo lo que define el
+# archivo sin tener que nombrar la variable dos veces; el subshell `( )`
+# contiene esa exportación para que no se cuele en el resto del cron.
+#
+# ── El log ───────────────────────────────────────────────────────────────────
+# El endpoint devuelve JSON con {tomadas, enviadas, fallidas, omitidas}: se
+# loguea la respuesta completa (no solo el código HTTP) para poder ver de un
+# vistazo si la cola está sana o se está acumulando en `fallidas`.
+# ─────────────────────────────────────────────────────────────────────────────
+# Drenar la cola `salidas` cada minuto.
+#
+# La lógica vive en drenar-salidas.sh y NO en esta línea, por dos razones que
+# están explicadas en ese archivo y que conviene no re-descubrir:
+#
+#   · EN UN CRONTAB, `%` ES ESPECIAL: cron lo convierte en un salto de línea y
+#     corta el comando ahí. Un `curl -w '%{http_code}'` escrito acá se rompe en
+#     silencio. Habría que escribir `\%`, que es justo lo que alguien "arregla"
+#     seis meses después.
+#   · El script lee SOLO `CRON_SECRET` con sed, en lugar de hacer `source` del
+#     .env.production entero: así los demás secretos (la WHOP_API_KEY entre
+#     ellos) no terminan en el entorno del proceso de curl.
+#
+# Se apunta a `current` y no a una release fija: el swap atómico del deploy
+# cambia ese symlink, así que el cron sigue al código nuevo sin tocar el crontab.
+#
+# Corre como el usuario `deploy`: el .env.production es chmod 600 y suyo. Con
+# otro usuario el script sale con "no puedo leer" en el log, que es lo que hay
+# que buscar si la cola deja de drenarse.
+* * * * * /srv/hilvapay/current/deploy/drenar-salidas.sh >> /var/log/hilvapay/salidas.log 2>&1

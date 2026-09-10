@@ -5,13 +5,15 @@ import type { PoolClient, QueryResultRow } from 'pg';
  * Acceso a Postgres. Mismos helpers que `dashboard-admin/lib/db.ts` (`q`, `q1`,
  * `tx`) para que el código se lea igual entre los dos proyectos.
  *
- * La única diferencia real es el tamaño del pool. El panel corre en un proceso
- * largo y puede permitirse 10 conexiones; esto corre en funciones serverless de
- * Vercel, donde cada invocación concurrente es un proceso nuevo con su propio
- * pool. Con `max: 10` alcanzan 15 checkouts simultáneos para agotar el límite de
- * conexiones de Neon/Supabase y empezar a devolver errores de conexión justo en
- * el momento de más tráfico. De ahí el `max: 3` y la recomendación de usar la
- * connection string con pooler.
+ * `max: 10` porque esto corre como UN proceso largo de PM2 en la VPS, con Caddy
+ * adelante — no como funciones serverless. Un proceso persistente reusa las
+ * conexiones del pool entre requests, así que 10 alcanzan de sobra y no hay
+ * riesgo de agotar el límite del servidor. (En serverless habría que bajarlo a 2
+ * o 3, porque cada invocación concurrente es un proceso nuevo con su propio pool
+ * y el límite se multiplica por la concurrencia. No es el caso.)
+ *
+ * Postgres es el paquete nativo de Ubuntu en `127.0.0.1`, no un contenedor y no
+ * un servicio hosteado: no hace falta pooler externo ni SSL.
  *
  * No hay modo degradado: sin base no se puede cobrar, y el error tiene que
  * salir fuerte y temprano en vez de dejar órdenes a medio escribir.
@@ -26,8 +28,8 @@ export function getPool(): Pool {
     }
     pool = new Pool({
       connectionString: url,
-      max: 3,
-      idleTimeoutMillis: 10_000,
+      max: 10,
+      idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 5_000,
     });
     // Sin este listener, un reinicio de Postgres se propaga como excepción no

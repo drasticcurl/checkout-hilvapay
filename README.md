@@ -19,7 +19,7 @@ archivo es solo cómo levantarlo.
 npm install
 ./scripts/configurar-env.sh          # pide las credenciales y las VERIFICA contra Whop
 npm run db:migrate
-npm run dev                          # http://localhost:3010
+npm run dev                          # http://localhost:3020
 ```
 
 `configurar-env.sh` escribe `.env.local` con permisos 600 y confirma contra la API que la key, la
@@ -136,9 +136,8 @@ intervenga. `configurar-env.sh` avisa si detecta uno.
 
 ## Base de datos
 
-Postgres. En Vercel usá la connection string **con pooler** (Neon con `-pooler`, o el puerto 6543 de
-Supabase): las funciones serverless abren y cierran conexiones todo el tiempo y sin pooler se agota el
-límite.
+Postgres 16, el paquete nativo de Ubuntu en la VPS (`127.0.0.1:5432`), con base propia. No hace falta
+pooler ni SSL: la app corre como **un** proceso de PM2 y reusa las conexiones del pool.
 
 Local:
 

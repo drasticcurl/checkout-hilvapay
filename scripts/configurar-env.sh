@@ -186,9 +186,9 @@ preguntar PLAN_UPSELL_3 "plan_id del upsell 3"           no "plan_"
 titulo "4. Base de datos"
 [[ -z "${ACTUAL[DATABASE_URL]:-}" ]] && ACTUAL[DATABASE_URL]="postgresql://localhost:5432/checkout"
 cat <<'TXT'
-  En Vercel usá la connection string CON pooler (Neon con -pooler, o el puerto
-  6543 de Supabase): las funciones serverless abren y cierran conexiones todo el
-  tiempo y sin pooler se agota el límite.
+  En la VPS es el Postgres nativo en 127.0.0.1:5432, con la base propia de este
+  servicio. En local, tu Postgres de desarrollo. No hace falta pooler ni SSL: la
+  app es UN proceso largo de PM2 que reusa las conexiones del pool.
 
 TXT
 preguntar DATABASE_URL "Connection string de Postgres"

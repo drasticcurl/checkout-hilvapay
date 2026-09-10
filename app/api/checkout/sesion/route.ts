@@ -56,7 +56,8 @@ function excedeLimite(ip: string): boolean {
 }
 
 function ipDelRequest(req: Request): string {
-  // Vercel pone la IP real en x-forwarded-for (el primer valor de la lista).
+  // Caddy pone la IP real en x-forwarded-for (el primer valor de la lista) y
+  // además en x-real-ip, que setea el bloque de deploy/Caddyfile.hilvapay.
   const xff = req.headers.get('x-forwarded-for');
   if (xff) return xff.split(',')[0].trim();
   return 'sin-ip';

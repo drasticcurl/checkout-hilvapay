@@ -92,7 +92,7 @@ export async function whopFetch<T>(path: string, init: RequestInit = {}, opts: O
 
   if (opts.idempotencyKey) headers['Idempotency-Key'] = opts.idempotencyKey;
 
-  // Un fetch sin timeout puede quedar colgado hasta que Vercel mate la función,
+  // Un fetch sin timeout puede quedar colgado indefinidamente en el proceso,
   // y el comprador se queda mirando un spinner sin saber si le cobraron.
   const señal = AbortSignal.timeout(TIMEOUT_MS);
 
