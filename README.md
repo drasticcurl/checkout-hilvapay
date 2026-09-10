@@ -113,7 +113,7 @@ Medido el **2026-09-10** contra la API real:
 
 Los planes de los tres upsells **todavía no existen**.
 
-### Cuatro endpoints que NO sirven para verificar
+### Cuatro endpoints de v1 que NO sirven para verificar
 
 Verificado: los cuatro devuelven falsos positivos o falsos negativos.
 
@@ -125,6 +125,30 @@ Verificado: los cuatro devuelven falsos positivos o falsos negativos.
 | `GET /products` sin `account_id` | **200 con el catálogo público de Whop.** La peor: parece que funcionó |
 
 El que sirve para sondear es `GET /companies/{biz_id}`.
+
+### Pero el biz id SÍ se puede sacar de la key, en v2 y v5
+
+La tabla de arriba es correcta y era incompleta: probaba solo v1. Medido el
+**2026-09-10** contra la API real, el mismo concepto en otra versión sí devuelve la company del
+negocio:
+
+| Endpoint | Resultado |
+|---|---|
+| `GET /api/v5/company` | **200 con la company correcta.** `{id, title, route, created_at, image_url, authorized_user}` |
+| `GET /api/v2/company` | **200 con la company correcta**, con menos campos |
+| `GET /api/v1/companies/me` | 200 con la **equivocada**: `biz_mq2nWbR4AjIBlZ`, título `"Me"`, route `"me"` |
+
+Tres cosas más que se midieron, porque de ellas depende que sea usable:
+
+- Con una **key inválida**, `v5/company` da **403** con un mensaje claro. Nunca una company al azar.
+- **Ignora `Api-Version-Date`**: v2 y v5 se versionan por path. Probado con un `1999-01-01` inventado,
+  responde igual. Por eso `identificarCompany` no manda ese header.
+- **Una key ve una sola company**: `v2/companies` da 401 y `v5/companies` da 404. No hay ambigüedad de
+  "cuál de todas".
+
+Esto es lo que usa el botón **Identificar** de `/admin/conexion`. No reemplaza a
+`GET /companies/{biz_id}`: el guardado se sigue habilitando con ese, que es v1, la misma versión que
+usan los cobros. Si Whop cambiara `v5/company` se pierde la comodidad, no la capacidad de configurar.
 
 ## Configuración en Whop
 

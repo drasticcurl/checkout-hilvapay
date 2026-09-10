@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { CheckCircle, Warning, WarningCircle } from '@phosphor-icons/react/ssr';
+import { CheckCircle, MagnifyingGlass, Warning, WarningCircle } from '@phosphor-icons/react/ssr';
 import type { EstadoCredenciales } from '@/lib/whop-credenciales';
 import { Aviso, Boton, Campo, Tarjeta, clasesControl } from '@/components/panel/ui';
 import { Dialogo } from '@/components/panel/Dialogo';
@@ -11,6 +11,21 @@ type Resultado =
   | { tipo: 'nada' }
   | { tipo: 'probando' }
   | { tipo: 'ok'; companyNombre: string }
+  | { tipo: 'error'; motivo: string };
+
+/**
+ * Lo que devolvió "Identificar biz id".
+ *
+ * `discrepa` es el caso que justifica el botón más allá de la comodidad: la key
+ * pertenece a una company y en el campo hay OTRA. Es exactamente la forma en que
+ * los cobros terminan entrando en la cuenta equivocada, y hasta ahora no había
+ * manera de detectarlo desde acá — el sondeo contra `/companies/{biz_id}` puede
+ * decir que el par no existe, pero no a quién pertenece la key.
+ */
+type Identificacion =
+  | { tipo: 'nada' }
+  | { tipo: 'buscando' }
+  | { tipo: 'ok'; companyId: string; companyNombre: string; discrepa: string | null }
   | { tipo: 'error'; motivo: string };
 
 /**
@@ -42,12 +57,51 @@ export function FormularioCredenciales({ estado }: { estado: EstadoCredenciales 
   const [versionDate, setVersionDate] = useState(estado.versionDate);
 
   const [resultado, setResultado] = useState<Resultado>({ tipo: 'nada' });
+  const [identificacion, setIdentificacion] = useState<Identificacion>({ tipo: 'nada' });
   const [confirmando, setConfirmando] = useState<'guardar' | 'volver' | null>(null);
   const [password, setPassword] = useState('');
   const [guardando, setGuardando] = useState(false);
   const [errorGuardado, setErrorGuardado] = useState<string | null>(null);
 
   const cuerpo = () => ({ apiKey, companyId, base, versionDate });
+
+  /**
+   * Le pregunta a Whop de quién es la key y completa el campo del biz id.
+   *
+   * Si el campo ya tenía otro valor, NO lo pisa en silencio: lo reemplaza y deja
+   * el anterior a la vista en el aviso. Pisar sin decir nada esconde justamente
+   * el error que este botón sirve para encontrar.
+   */
+  async function identificar(): Promise<void> {
+    setIdentificacion({ tipo: 'buscando' });
+    setResultado({ tipo: 'nada' });
+    try {
+      const res = await fetch('/api/admin/whop/credenciales/identificar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey, base }),
+      });
+      const data = (await res.json()) as
+        | { ok: true; companyId: string; companyNombre: string }
+        | { ok: false; motivo: string };
+
+      if (!data.ok) {
+        setIdentificacion({ tipo: 'error', motivo: data.motivo });
+        return;
+      }
+
+      const previo = companyId.trim();
+      setCompanyId(data.companyId);
+      setIdentificacion({
+        tipo: 'ok',
+        companyId: data.companyId,
+        companyNombre: data.companyNombre,
+        discrepa: previo && previo !== data.companyId ? previo : null,
+      });
+    } catch {
+      setIdentificacion({ tipo: 'error', motivo: 'No se pudo contactar al servidor.' });
+    }
+  }
 
   async function probar(): Promise<void> {
     setResultado({ tipo: 'probando' });
@@ -131,17 +185,51 @@ export function FormularioCredenciales({ estado }: { estado: EstadoCredenciales 
         <Campo
           etiqueta="Company id"
           htmlFor="whop-company-id"
-          ayuda="El biz_… del negocio. Sale en las URLs del dashboard de Whop."
+          ayuda="El biz_… del negocio. Podés traerlo desde la key con el botón de al lado."
         >
-          <input
-            id="whop-company-id"
-            value={companyId}
-            onChange={(e) => setCompanyId(e.target.value)}
-            placeholder="biz_XXXXXXXXXXXX"
-            spellCheck={false}
-            className={clasesControl('font-mono')}
-          />
+          <div className="flex gap-2">
+            <input
+              id="whop-company-id"
+              value={companyId}
+              onChange={(e) => setCompanyId(e.target.value)}
+              placeholder="biz_XXXXXXXXXXXX"
+              spellCheck={false}
+              className={clasesControl('font-mono')}
+            />
+            <Boton
+              variante="secundario"
+              onClick={() => void identificar()}
+              disabled={identificacion.tipo === 'buscando'}
+              icono={<MagnifyingGlass size={14} aria-hidden="true" />}
+            >
+              {identificacion.tipo === 'buscando' ? 'Buscando…' : 'Identificar'}
+            </Boton>
+          </div>
         </Campo>
+
+        {identificacion.tipo === 'ok' ? (
+          identificacion.discrepa ? (
+            <Aviso
+              tono="alerta"
+              icono={<Warning size={16} aria-hidden="true" />}
+              rol="alert"
+              titulo="La key es de otra cuenta"
+            >
+              Esta API key pertenece a <strong>{identificacion.companyNombre}</strong> (
+              <span className="font-mono">{identificacion.companyId}</span>), pero en el campo había{' '}
+              <span className="font-mono">{identificacion.discrepa}</span>. Se reemplazó por el de la
+              key. Si esperabas la otra cuenta, la key es la equivocada.
+            </Aviso>
+          ) : (
+            <Aviso tono="vivo" icono={<CheckCircle size={16} aria-hidden="true" />} rol="status">
+              La key pertenece a <strong>{identificacion.companyNombre}</strong>. Company id completado.
+            </Aviso>
+          )
+        ) : identificacion.tipo === 'error' ? (
+          <Aviso tono="peligro" icono={<WarningCircle size={16} aria-hidden="true" />} rol="alert">
+            {identificacion.motivo}
+          </Aviso>
+        ) : null}
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Campo

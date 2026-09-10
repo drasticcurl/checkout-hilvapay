@@ -254,6 +254,103 @@ export async function verificarCredenciales(c: Credenciales): Promise<ResultadoV
   return { ok: true, companyNombre: nombre ?? c.companyId };
 }
 
+/* ───────────────────── Identificar la company desde la key ────────────────── */
+
+export type ResultadoIdentificacion =
+  | { ok: true; companyId: string; companyNombre: string }
+  | { ok: false; motivo: string; status?: number };
+
+/**
+ * Averigua a qué company pertenece una API key, sin que nadie tenga que copiar el
+ * `biz_` a mano.
+ *
+ * ── El endpoint, y por qué NO es el de v1 ────────────────────────────────────
+ * Usa `GET /api/v5/company`. El README tenía documentado que no se podía, y era
+ * cierto **para v1**: `v1/companies/me` responde 200 pero con la company PERSONAL
+ * del usuario (medido: devuelve `biz_mq2nWbR4AjIBlZ`, título "Me", en vez de la
+ * del negocio). Lo que faltaba probar es que el mismo concepto en v2 y v5 sí
+ * devuelve la del negocio.
+ *
+ * Medido el 2026-09-10 contra la API real:
+ *   · `v5/company` → 200 con el id y el título correctos de la company del negocio
+ *   · `v2/company` → lo mismo, con menos campos
+ *   · `v1/companies/me` → 200 con la company equivocada
+ *   · `v1/accounts/me` → 403 por el scope `company:balance:read`
+ *   · con una key inválida → 403 con un mensaje claro, NUNCA una company al azar
+ *   · `v2/companies` → 401 y `v5/companies` → 404: una key ve una sola company,
+ *     así que no hay ambigüedad de "cuál de todas"
+ *
+ * ── Dos decisiones deliberadas ──────────────────────────────────────────────
+ * 1. **No manda `Api-Version-Date`.** v2 y v5 se versionan por path y el header lo
+ *    ignoran (probado con un `1999-01-01` inventado: responde igual). Mandarlo
+ *    sugeriría que el pin del proyecto gobierna esta llamada, y no lo hace.
+ *
+ * 2. **Esto NO reemplaza a `verificarCredenciales`.** Es prefill y chequeo
+ *    cruzado. El guardado lo sigue habilitando `GET /companies/{biz_id}`, que es
+ *    v1 — la misma versión que usan los cobros. Si Whop cambiara `v5/company`, se
+ *    pierde la comodidad de identificar, no la capacidad de configurar.
+ */
+export async function identificarCompany(
+  apiKey: string,
+  baseConfigurada: string,
+): Promise<ResultadoIdentificacion> {
+  // Se deriva del origen de la base configurada y no se hardcodea el host: si el
+  // servicio apunta a otro host, identificar lo sigue.
+  let origen: string;
+  try {
+    origen = new URL(baseConfigurada).origin;
+  } catch {
+    return { ok: false, motivo: 'La URL base no es válida, así que no se puede identificar la cuenta.' };
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`${origen}/api/v5/company`, {
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(TIMEOUT_VERIFICACION_MS),
+      cache: 'no-store',
+    });
+  } catch (err) {
+    const abortada = err instanceof Error && err.name === 'TimeoutError';
+    return {
+      ok: false,
+      motivo: abortada ? 'Whop no contestó en tiempo.' : `No se pudo conectar con ${origen}.`,
+    };
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    return { ok: false, status: res.status, motivo: 'Whop no reconoce esa API key.' };
+  }
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: res.status,
+      motivo: `Whop respondió ${res.status} al identificar la cuenta. Podés poner el biz id a mano.`,
+    };
+  }
+
+  let cuerpo: unknown;
+  try {
+    cuerpo = await res.json();
+  } catch {
+    return { ok: false, motivo: 'Whop respondió algo que no es JSON.' };
+  }
+
+  const obj = (cuerpo ?? {}) as Record<string, unknown>;
+  const id = typeof obj.id === 'string' ? obj.id : null;
+  const nombre =
+    (typeof obj.title === 'string' && obj.title) || (typeof obj.name === 'string' && obj.name) || null;
+
+  if (!id) return { ok: false, motivo: 'Whop contestó sin id de company.' };
+  // El chequeo que evita repetir el problema de v1: la company personal se llama
+  // "Me" y su route es "me". Si aparece eso, es el endpoint equivocado.
+  if (obj.route === 'me') {
+    return { ok: false, motivo: 'Whop devolvió la cuenta personal y no la del negocio. Poné el biz id a mano.' };
+  }
+
+  return { ok: true, companyId: id, companyNombre: nombre ?? id };
+}
+
 /* ───────────────────────────── Guardado y estado ──────────────────────────── */
 
 /**
