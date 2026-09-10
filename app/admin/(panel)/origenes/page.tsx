@@ -4,6 +4,8 @@
  */
 import { Fingerprint, Warning } from '@phosphor-icons/react/ssr';
 import { listarOrigenes } from '../../../../lib/admin/origenes';
+import { listarFunnelsConPasos } from '../../../../lib/admin/funnels';
+import { integracionDesdeFunnel } from '../../../../lib/admin/integracion';
 import {
   Aviso,
   Codigo,
@@ -16,6 +18,7 @@ import {
   Th,
   Tr,
 } from '../../../../components/panel/ui';
+import { ComoIntegrar } from '../../../../components/panel/ComoIntegrar';
 import { SwitchActivo } from '../SwitchActivo';
 import { EliminarOrigenButton } from './EliminarOrigenButton';
 import { FormularioOrigen } from './FormularioOrigen';
@@ -23,8 +26,32 @@ import { FormularioOrigen } from './FormularioOrigen';
 export const dynamic = 'force-dynamic';
 
 export default async function OrigenesPage(): Promise<JSX.Element> {
-  const origenes = await listarOrigenes();
+  const [origenes, funnels] = await Promise.all([listarOrigenes(), listarFunnelsConPasos()]);
   const activos = origenes.filter((o) => o.activo).length;
+
+  // Los pasos de TODOS los funnels, para poder decir qué dominios hacen falta
+  // autorizar sin que el usuario tenga que abrir cada funnel a mirar. Los slugs
+  // y los botones no se muestran acá (`soloLoader`): pertenecen a la pantalla del
+  // funnel, donde están al lado del paso que cobran. Se calculan igual porque de
+  // ellos sale `origenesNecesarios`, y después se vacían antes de cruzar a
+  // cliente — el HTML de todos los botones de todos los funnels en el payload de
+  // una pantalla que no los dibuja es peso muerto.
+  const integracion = integracionDesdeFunnel(
+    process.env.NEXT_PUBLIC_BASE_URL ?? '',
+    funnels.flatMap((f) =>
+      f.pasos.map((p) => ({
+        id: p.id,
+        slug: p.slug,
+        tipo: p.tipo,
+        nombre: p.nombre,
+        url_externa: p.url_externa,
+        permite_rechazo: p.permite_rechazo,
+        paso_rechazado_id: p.paso_rechazado_id,
+        producto: p.producto,
+      })),
+    ),
+  );
+  const origenesAutorizados = origenes.filter((o) => o.activo).map((o) => o.origen);
 
   return (
     <div className="space-y-6">
@@ -87,6 +114,12 @@ export default async function OrigenesPage(): Promise<JSX.Element> {
           </tbody>
         </TablaEnvoltorio>
       )}
+
+      <ComoIntegrar
+        integracion={{ ...integracion, pasos: [] }}
+        origenesAutorizados={origenesAutorizados}
+        soloLoader
+      />
     </div>
   );
 }
