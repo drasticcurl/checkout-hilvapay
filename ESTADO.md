@@ -313,17 +313,18 @@ Y probarlo con el botón **Mandar una prueba** de `/admin/alertas`. Ojo con el m
 **Telegram no permite que un bot escriba primero.** Quien no le haya mandado `/start` al bot recibe un
 403 y su fila se pone en pausa sola (el panel lo muestra y explica qué hacer).
 
-### 3.8 Los crons nuevos hay que instalarlos en la VPS
+### 3.8 Los crons nuevos — **instalados y verificados el 2026-09-10**
 
-El crontab no se instala con el deploy:
+Los tres corren en la VPS. Se agregaron al crontab de `deploy` **sin tocar** los 14 crons de
+`/srv/panel/` y `/srv/panel-infinix/` que comparten ese crontab (ver §4.4). Verificado corriendo los dos
+scripts a mano contra el proceso real:
 
-```bash
-sudo mkdir -p /var/log/hilvapay && sudo chown deploy:deploy /var/log/hilvapay
-crontab -u deploy /srv/hilvapay/repo/deploy/cron.hilvapay
-crontab -u deploy -l          # confirmar las TRES líneas
+```
+/api/cron/reconciliar → {"revisados":0,...,"errores":0}
+/api/cron/vigilar     → {"detectadas":0,"mandadas":0,"sinCanal":0}
 ```
 
-Y sigue faltando un `/etc/logrotate.d/hilvapay`: `salidas.log` son ~525k líneas por año.
+Falta un `/etc/logrotate.d/hilvapay`: `salidas.log` son ~525k líneas por año.
 
 ### 3.9 El login del panel no tiene freno de fuerza bruta
 
@@ -397,6 +398,13 @@ En la VPS: **`/etc/caddy/Caddyfile` tiene bloques que no viven en ningún repo**
 (`ritual.hilvanapp.org`, `generador.hilvanapp.online`, `gatos.infinixapp.com`,
 `panel.infinixapp.com`). Un `provision.sh` de otro repo los borraría. Backups en
 `/etc/caddy/Caddyfile.bak-*`.
+
+**Y el crontab de `deploy` es COMPARTIDO.** Verificado el 2026-09-10: 35 líneas, de las cuales 9 son de
+`/srv/panel/` y 5 de `/srv/panel-infinix/`. `crontab <archivo>` reemplaza el crontab **entero**, así que
+instalar `deploy/cron.hilvapay` de una borraría los 14 crons de los otros dos proyectos — y no se
+notaría hasta que alguien pregunte por qué el panel dejó de actualizar cotizaciones. Las líneas se
+**agregan** una por una; el procedimiento con respaldo está en la cabecera de `deploy/cron.hilvapay`.
+Backups en `~deploy/backups/crontab-*.bak`.
 
 ### 4.5 La zona de Cloudflare no puede pasar a Full (strict)
 

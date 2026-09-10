@@ -1,5 +1,31 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# cron de hilvapay — instalar con:  crontab -u deploy -
+# cron de hilvapay
+#
+# ⚠️  **NO INSTALAR ESTE ARCHIVO CON `crontab -u deploy -` NI `crontab <archivo>`.**
+#
+# El crontab del usuario `deploy` es COMPARTIDO con los otros proyectos de la
+# máquina: verificado el 2026-09-10, tenía 33 líneas, 9 de `/srv/panel/` y 5 de
+# `/srv/panel-infinix/` (fetch-fx, rollup, sync-ads, ensure-partitions…).
+# `crontab <archivo>` REEMPLAZA el crontab entero: instalar este archivo así
+# borraría los 14 crons de los otros dos proyectos, y no se notaría hasta que
+# alguien mire por qué el panel dejó de actualizar cotizaciones.
+#
+# Es el mismo problema que documenta ESTADO.md §4.4 con `/etc/caddy/Caddyfile`:
+# recursos de la máquina que no viven en ningún repo.
+#
+# La forma correcta es AGREGAR solo las líneas que faltan, con respaldo:
+#
+#   mkdir -p ~/backups && crontab -l > ~/backups/crontab-$(date +%F-%H%M%S).bak
+#   TMP=$(mktemp); crontab -l > "$TMP"
+#   grep -q 'pegar-cron.sh /api/cron/reconciliar' "$TMP" || \
+#     echo '*/10 * * * * /srv/hilvapay/repo/deploy/pegar-cron.sh /api/cron/reconciliar >> /var/log/hilvapay/reconciliar.log 2>&1' >> "$TMP"
+#   grep -q 'pegar-cron.sh /api/cron/vigilar' "$TMP" || \
+#     echo '*/5 * * * * /srv/hilvapay/repo/deploy/pegar-cron.sh /api/cron/vigilar >> /var/log/hilvapay/vigilar.log 2>&1' >> "$TMP"
+#   crontab "$TMP" && rm -f "$TMP"
+#   crontab -l | grep -c '/srv/panel'   # confirmar que los otros siguen ahí
+#
+# Este archivo queda como la REFERENCIA de qué líneas tiene que haber y por qué,
+# no como algo que se pegue de una.
 #
 # Mismo formato que dashboard-admin/deploy/cron.panel: es un crontab de
 # USUARIO (deploy), sin el quinto campo de usuario que llevaría /etc/cron.d/.
