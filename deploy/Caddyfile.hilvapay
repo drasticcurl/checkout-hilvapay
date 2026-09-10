@@ -63,12 +63,13 @@ pay.hilvanapp.com {
 	# orden y de un embed vivo de Whop — servir una versión vieja desde caché
 	# le mostraría a un comprador un checkout que ya no corresponde.
 	#
-	# EXCEPTO /loader.js, y por eso hay dos bloques `header` en vez de uno: ese
-	# script lo baja CADA visita a CADA página de upsell del funnel, y
-	# `next.config.mjs` le pone `public, max-age=300` a propósito. Un `header`
-	# con `defer` acá pisa lo que puso Next, así que un no-store global le
-	# sacaría el caché al archivo más pedido del servicio sin que nadie se dé
-	# cuenta.
+	# EXCEPTO /loader.js y /media/*, y por eso hay dos bloques `header` en vez de
+	# uno. El loader lo baja CADA visita a CADA página de upsell del funnel, y
+	# las imágenes de producto se sirven con un nombre que incluye el hash de su
+	# contenido, así que son inmutables. A los dos les pone caché el propio Next
+	# (`next.config.mjs` y `app/media/[archivo]/route.ts`), y un `header` con
+	# `defer` acá lo pisaría: un no-store global le saca el caché a lo único de
+	# este servicio que sí conviene cachear, sin que nadie se dé cuenta.
 	header {
 		defer
 		X-Robots-Tag "noindex, nofollow"
@@ -76,7 +77,7 @@ pay.hilvanapp.com {
 		Referrer-Policy "strict-origin-when-cross-origin"
 	}
 
-	@sin_cache not path /loader.js
+	@sin_cache not path /loader.js /media/*
 	header @sin_cache {
 		defer
 		Cache-Control "no-store, must-revalidate"

@@ -25,6 +25,8 @@ export function FormularioProducto({ producto }: Props): JSX.Element {
   const [precioAnclaje, setPrecioAnclaje] = useState(producto?.precio_anclaje ?? '');
   const [descripcion, setDescripcion] = useState(producto?.descripcion ?? '');
   const [imagenUrl, setImagenUrl] = useState(producto?.imagen_url ?? '');
+  const [subiendo, setSubiendo] = useState(false);
+  const [errorImagen, setErrorImagen] = useState<string | null>(null);
 
   const [planes, setPlanes] = useState<PlanWhop[]>([]);
   const [errorPlanes, setErrorPlanes] = useState<string | null>(null);
@@ -75,6 +77,32 @@ export function FormularioProducto({ producto }: Props): JSX.Element {
     }, 400);
     return () => clearTimeout(timeout);
   }, [planId, precio]);
+
+
+  /**
+   * Sube la imagen y deja su URL en el estado. NO guarda el producto: eso lo hace
+   * el botón de abajo. Así, si la subida anda pero el guardado falla, no queda un
+   * producto a medias — solo un archivo huérfano en disco, que no molesta a nadie.
+   */
+  async function subirImagen(archivo: File): Promise<void> {
+    setSubiendo(true);
+    setErrorImagen(null);
+    try {
+      const fd = new FormData();
+      fd.append('imagen', archivo);
+      const res = await fetch('/api/admin/productos/imagen', { method: 'POST', body: fd });
+      const data = (await res.json()) as { ok: boolean; url?: string; mensaje?: string };
+      if (!res.ok || !data.ok || !data.url) {
+        setErrorImagen(data.mensaje ?? 'No se pudo subir la imagen.');
+        return;
+      }
+      setImagenUrl(data.url);
+    } catch {
+      setErrorImagen('No se pudo contactar al servidor.');
+    } finally {
+      setSubiendo(false);
+    }
+  }
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>): Promise<void> {
     e.preventDefault();
@@ -223,15 +251,79 @@ export function FormularioProducto({ producto }: Props): JSX.Element {
         />
       </label>
 
-      <label className="block">
-        <span className="block text-sm font-medium text-texto">Imagen (URL, opcional)</span>
-        <input
-          type="text"
-          value={imagenUrl ?? ''}
-          onChange={(e) => setImagenUrl(e.target.value)}
-          className="mt-1.5 w-full rounded-md border border-borde px-3 py-2 text-sm text-texto focus:border-precio focus:outline-none focus:ring-1 focus:ring-precio"
-        />
-      </label>
+      {/* La imagen se SUBE. Antes se pedía una URL, que obligaba a tener la
+          imagen hosteada en otro lado — y una URL ajena se puede caer o cambiar
+          sin aviso, dejando la ficha del checkout con un hueco. El campo de URL
+          queda abajo, plegado, para el caso de que la imagen ya esté hosteada. */}
+      <div className="block">
+        <span className="block text-sm font-medium text-texto">Imagen del producto</span>
+        <div className="mt-1.5 flex items-start gap-3">
+          {imagenUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element -- imagen subida al panel, sin dominio fijo para next/image
+            <img
+              src={imagenUrl}
+              alt="Vista previa"
+              className="h-16 w-16 shrink-0 rounded-md border border-borde object-cover"
+            />
+          ) : (
+            <div
+              className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md border border-dashed border-borde text-xs text-texto-suave"
+              aria-hidden="true"
+            >
+              sin
+            </div>
+          )}
+
+          <div className="min-w-0 flex-1">
+            <input
+              id="imagen-archivo"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              disabled={subiendo}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void subirImagen(f);
+                // Se limpia el input para que elegir el MISMO archivo otra vez
+                // vuelva a disparar el onChange (si no, el navegador lo ignora).
+                e.target.value = '';
+              }}
+              className="block w-full text-sm text-texto file:mr-3 file:rounded-md file:border-0 file:bg-comprar file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-white hover:file:bg-comprar-oscuro disabled:opacity-50"
+            />
+            <p className="mt-1 text-xs text-texto-suave">
+              JPG, PNG o WebP, hasta 2 MB. Se muestra chica (56 px) en el checkout.
+            </p>
+            {subiendo ? <p className="mt-1 text-xs text-texto-suave">Subiendo…</p> : null}
+            {errorImagen ? (
+              <p role="alert" className="mt-1 text-xs font-medium text-urgencia">
+                {errorImagen}
+              </p>
+            ) : null}
+            {imagenUrl ? (
+              <button
+                type="button"
+                onClick={() => setImagenUrl('')}
+                className="mt-1 text-xs font-medium text-urgencia hover:underline"
+              >
+                Quitar la imagen
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        <details className="mt-2">
+          <summary className="cursor-pointer text-xs text-texto-suave">
+            o usar una URL que ya tengo hosteada
+          </summary>
+          <input
+            type="text"
+            value={imagenUrl ?? ''}
+            onChange={(e) => setImagenUrl(e.target.value)}
+            placeholder="https://…"
+            aria-label="URL de la imagen"
+            className="mt-1.5 w-full rounded-md border border-borde px-3 py-2 text-sm text-texto focus:border-precio focus:outline-none focus:ring-1 focus:ring-precio"
+          />
+        </details>
+      </div>
 
       <label className="block">
         <span className="block text-sm font-medium text-texto">Descripción (opcional)</span>

@@ -31,8 +31,11 @@ export const CajaTarjeta = forwardRef<ControlesTarjeta, {
   onError: (mensaje: string) => void;
 }>(function CajaTarjeta({ sessionId, planId, email, environment, onReady, onCompletado, onError }, ref) {
   return (
-    <div className="whop-checkout-wrapper rounded-lg border border-precio p-3">
-      <p className="mb-2 text-sm font-semibold text-texto">Tarjeta de crédito</p>
+    // Sin título propio arriba del iframe: el embed de Whop dibuja el suyo
+    // ("Tarjeta de crédito" con el radio y el icono), y dos títulos seguidos se
+    // leen como un error de la página. La caja con borde azul y el padding son
+    // de este lado, que es lo único que se puede estilar del embed desde afuera.
+    <div className="whop-checkout-wrapper rounded-lg border border-precio px-3 py-2">
       <WhopCheckoutEmbed
         ref={ref as never}
         sessionId={sessionId}

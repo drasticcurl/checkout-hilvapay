@@ -167,7 +167,7 @@ export function CheckoutContainer({
       {config.timerMinutos ? <Timer minutos={config.timerMinutos} /> : null}
       {config.badgeSeguro !== false ? <BadgeSeguro /> : null}
 
-      <div className="flex flex-col gap-4 px-4 py-6">
+      <div className="flex flex-col gap-4 px-4 pb-6 pt-4">
         <CardProducto
           nombre={producto.nombre}
           imagenUrl={producto.imagenUrl}
@@ -197,8 +197,9 @@ export function CheckoutContainer({
             onError={(msg) => setMensajeError(msg)}
           />
         ) : (
-          <div className="whop-checkout-wrapper rounded-lg border border-precio p-3">
-            <p className="mb-2 text-sm font-semibold text-texto">Tarjeta de crédito</p>
+          // El esqueleto que se ve mientras faltan datos: misma caja azul que
+          // va a tener el embed, para que al montarse no salte el layout.
+          <div className="whop-checkout-wrapper rounded-lg border border-precio px-3 py-2">
             <div className="flex h-32 items-center justify-center">
               <span
                 className="h-6 w-6 animate-spin rounded-full border-2 border-borde border-t-precio"
@@ -217,6 +218,15 @@ export function CheckoutContainer({
           cargando={enviando || redirigiendo}
           onClick={handleClickComprar}
         />
+
+        {/* Va como texto y NO como links: no existen esas páginas todavía, y un
+            link roto en un checkout es peor que no tenerlo. Los términos que sí
+            aplican al cobro los muestra el embed de Whop adentro del iframe
+            (`hideTermsAndConditions` en false, que es donde vive el
+            consentimiento para guardar la tarjeta). */}
+        <p className="mt-6 text-center text-[11px] leading-relaxed text-gray-400">
+          Al concluir tu compra, aceptás los Términos de Uso y la Política de Privacidad.
+        </p>
       </div>
     </div>
   );
