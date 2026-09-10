@@ -59,10 +59,18 @@
 #     .env.production entero: así los demás secretos (la WHOP_API_KEY entre
 #     ellos) no terminan en el entorno del proceso de curl.
 #
-# Se apunta a `current` y no a una release fija: el swap atómico del deploy
-# cambia ese symlink, así que el cron sigue al código nuevo sin tocar el crontab.
+# Se apunta a `repo/deploy/` y NO a `current/deploy/`, y no es un detalle:
+# `current` es un symlink a `<release>/.next/standalone`, que es el build
+# autocontenido de Next — ahí NO existe la carpeta deploy/. Verificado en la VPS
+# el 2026-09-10: `current/deploy/drenar-salidas.sh` no existe y el cron nunca
+# habría corrido.
+#
+# `repo/` sí sirve y además siempre está al día: el paso 3 del deploy le hace
+# `fetch` + `reset --hard origin/main` antes de armar la release. Es el mismo
+# patrón que usan los otros proyectos de la máquina
+# (`/srv/panel/repo/deploy/deploy.sh`).
 #
 # Corre como el usuario `deploy`: el .env.production es chmod 600 y suyo. Con
 # otro usuario el script sale con "no puedo leer" en el log, que es lo que hay
 # que buscar si la cola deja de drenarse.
-* * * * * /srv/hilvapay/current/deploy/drenar-salidas.sh >> /var/log/hilvapay/salidas.log 2>&1
+* * * * * /srv/hilvapay/repo/deploy/drenar-salidas.sh >> /var/log/hilvapay/salidas.log 2>&1
