@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * El embed de Whop es un iframe y no acepta CSS de afuera: solo tema, color de
+ * acento, color de fondo, border radius y padding del contenedor, vía props.
+ * Todo lo que se estilee acá es lo que rodea al iframe.
+ *
+ * Esta clase la pone el propio loader de Whop alrededor del iframe; es el único
+ * gancho de CSS disponible.
+ */
+.whop-checkout-wrapper iframe {
+  width: 100%;
+  border: 0;
+  display: block;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+}

@@ -1,0 +1,9 @@
+{
+  "crons": [
+    {
+      "comment": "Drena la cola `salidas`: reporta la venta al dashboard-admin y manda el email de entrega. Cada minuto porque la cola casi siempre está vacía y el handler sale en una query; el costo es despreciable frente a que una venta tarde diez minutos en aparecer en el panel. OJO: los crons de Vercel solo corren en el plan Pro. En Hobby no se ejecuta y las salidas se acumulan SIN QUE NADA AVISE.",
+      "path": "/api/cron/salidas",
+      "schedule": "* * * * *"
+    }
+  ]
+}

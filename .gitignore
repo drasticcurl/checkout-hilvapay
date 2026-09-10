@@ -1,0 +1,22 @@
+node_modules/
+.next/
+out/
+build/
+.DS_Store
+
+# Env: solo se commitea el .example
+.env
+.env.local
+.env*.local
+.env.production
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Vercel
+.vercel
+
+# Logs
+npm-debug.log*
+yarn-error.log*
