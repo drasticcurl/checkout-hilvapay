@@ -35,6 +35,7 @@ import { NextResponse } from 'next/server';
 import { q1 } from '@/lib/db';
 import { cronAutorizado } from '@/lib/cron';
 import { pendientesDeReconciliar } from '@/lib/reconciliacion';
+import { resolverCredenciales } from '@/lib/whop-credenciales';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -58,7 +59,25 @@ const MIGRACIONES_ESPERADAS = [
   '003_funnels.sql',
   '004_alertas.sql',
   '005_alertas_tecnicas.sql',
+  '006_credenciales_whop.sql',
 ];
+
+/**
+ * De dónde salen hoy las credenciales de Whop, para el detalle del health.
+ *
+ * Envuelto en try/catch y devolviendo un string en vez de propagar: este
+ * endpoint es el que dispara el rollback del deploy, así que una excepción acá
+ * —por ejemplo con la migración 006 sin aplicar todavía— tumbaría una release
+ * sana por un campo informativo.
+ */
+async function fuenteCredenciales(): Promise<string> {
+  try {
+    const { fuente } = await resolverCredenciales();
+    return fuente;
+  } catch (err) {
+    return `sin resolver (${err instanceof Error ? err.message : String(err)})`;
+  }
+}
 
 /**
  * Lo que sin esto no se puede cobrar, en cualquier entorno.
@@ -205,6 +224,15 @@ export async function GET(req: Request): Promise<Response> {
           envOpcionalesFaltantes: env.faltanOpcionales,
           cobrosEsperandoReconciliacion: pendientes,
           alertasPorTelegram: process.env.TELEGRAM_BOT_TOKEN?.trim() ? 'configurado' : 'sin configurar',
+          // De dónde salen las credenciales de Whop: `entorno` es el
+          // comportamiento de siempre, `panel` significa que hay un override
+          // guardado en la tabla `config` (migración 006).
+          //
+          // NO afecta el `ok` ni el status HTTP, y las cuatro variables de Whop
+          // siguen siendo críticas más arriba. La base es un override, no un
+          // reemplazo: si algún día se invierte, hay que tocar `ENV_CRITICAS_SIEMPRE`
+          // y el `REQUIRED` de deploy.sh a la vez o queda un rollback en loop.
+          credencialesWhop: await fuenteCredenciales(),
         },
       }
     : publico;

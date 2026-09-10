@@ -7,6 +7,8 @@
  * directo, lo que se ve en el código es exactamente lo que sale por la red.
  */
 
+import { resolverCredenciales } from './whop-credenciales';
+
 const TIMEOUT_MS = 15_000;
 
 /** Error de la API de Whop, con lo necesario para decidir qué hacer. */
@@ -58,30 +60,41 @@ type Opciones = {
   conHeaders?: boolean;
 };
 
-function config() {
-  const apiKey = process.env.WHOP_API_KEY;
-  const base = process.env.WHOP_API_BASE;
-  const versionDate = process.env.WHOP_API_VERSION_DATE;
-
-  if (!apiKey) throw new Error('WHOP_API_KEY no está configurada');
-  if (!base) throw new Error('WHOP_API_BASE no está configurada');
-  // Sin el pin de versión, un cambio de la API rompe producción sin aviso. Y
-  // como el valor forma parte de la clave de idempotencia del lado de Whop, que
-  // esté vacío también rompería el replay de los reintentos.
-  if (!versionDate) throw new Error('WHOP_API_VERSION_DATE no está configurada');
-
-  return { apiKey, base: base.replace(/\/$/, ''), versionDate };
+/**
+ * Las credenciales con las que sale este request.
+ *
+ * Antes leía `process.env` directo. Ahora delega en `lib/whop-credenciales.ts`,
+ * que mira primero la fila de `config` (para poder rotar la key desde el panel
+ * sin redeployar) y cae a las variables de entorno. El env sigue siendo el piso
+ * obligatorio, así que el comportamiento con la tabla vacía es el de antes,
+ * incluidos los mensajes de error.
+ *
+ * Es `async` porque leer de la base lo es. Se pudo hacer sin tocar a ningún
+ * consumidor de este módulo: `config()` y `companyId()` solo se llaman desde acá
+ * adentro, y los siete lugares que las usan ya eran funciones `async`. El
+ * contrato exportado de `lib/whop.ts` no cambió.
+ *
+ * El costo por llamada es cero en el caso normal: `resolverCredenciales` cachea
+ * en memoria por 30 segundos y el guardado invalida el caché, así que un cobro no
+ * agrega un round-trip a Postgres.
+ */
+async function config() {
+  const { credenciales } = await resolverCredenciales();
+  return {
+    apiKey: credenciales.apiKey,
+    base: credenciales.base,
+    versionDate: credenciales.versionDate,
+  };
 }
 
 /** El company id (`biz_...`) que va como `account_id` en los POST. */
-export function companyId(): string {
-  const id = process.env.WHOP_COMPANY_ID;
-  if (!id) throw new Error('WHOP_COMPANY_ID no está configurada');
-  return id;
+export async function companyId(): Promise<string> {
+  const { credenciales } = await resolverCredenciales();
+  return credenciales.companyId;
 }
 
 export async function whopFetch<T>(path: string, init: RequestInit = {}, opts: Opciones = {}): Promise<T> {
-  const { apiKey, base, versionDate } = config();
+  const { apiKey, base, versionDate } = await config();
 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${apiKey}`,
@@ -391,7 +404,7 @@ export async function crearCheckoutConfiguration(params: {
   return whopFetch<CheckoutConfigWhop>('/checkout_configurations', {
     method: 'POST',
     body: JSON.stringify({
-      account_id: companyId(),
+      account_id: await companyId(),
       plan_id: params.planId,
       mode: 'payment',
       ...(params.metadata ? { metadata: params.metadata } : {}),
@@ -438,7 +451,7 @@ export async function crearPagoOffSession(params: {
     {
       method: 'POST',
       body: JSON.stringify({
-        account_id: companyId(),
+        account_id: await companyId(),
         plan_id: params.planId,
         member_id: params.memberId,
         payment_method_id: params.paymentMethodId,
@@ -468,7 +481,7 @@ export async function obtenerPlan(planId: string): Promise<PlanWhop> {
  */
 export async function listarPlanes(): Promise<PlanWhop[]> {
   const res = await whopFetch<{ data?: PlanWhop[] } | PlanWhop[]>(
-    `/plans?account_id=${encodeURIComponent(companyId())}&limit=100`,
+    `/plans?account_id=${encodeURIComponent(await companyId())}&limit=100`,
   );
   return Array.isArray(res) ? res : (res.data ?? []);
 }
@@ -485,7 +498,7 @@ export async function listarPlanes(): Promise<PlanWhop[]> {
  */
 export async function listarProductosWhop(): Promise<ProductoWhop[]> {
   const res = await whopFetch<{ data?: ProductoWhop[] } | ProductoWhop[]>(
-    `/products?account_id=${encodeURIComponent(companyId())}&limit=100`,
+    `/products?account_id=${encodeURIComponent(await companyId())}&limit=100`,
   );
   return Array.isArray(res) ? res : (res.data ?? []);
 }
@@ -559,7 +572,7 @@ export async function listarPagos(params: {
   limite?: number;
 } = {}): Promise<PagoListado[]> {
   const query = new URLSearchParams({
-    account_id: companyId(),
+    account_id: await companyId(),
     first: String(params.limite ?? 50),
     order: 'created_at',
     direction: 'desc',

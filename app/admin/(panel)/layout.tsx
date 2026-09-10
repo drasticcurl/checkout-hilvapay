@@ -12,6 +12,7 @@
  */
 import type { ReactNode } from 'react';
 import Link from 'next/link';
+import { Gear } from '@phosphor-icons/react/ssr';
 import { CerrarSesionButton } from './CerrarSesionButton';
 import { NavPanel } from '../../../components/panel/NavPanel';
 import { Insignia } from '../../../components/panel/ui';
@@ -45,9 +46,20 @@ export default function PanelLayout({ children }: { children: ReactNode }): JSX.
           <NavPanel variante="escritorio" />
 
           <div className="ml-auto flex shrink-0 items-center gap-2.5">
-            <Insignia tono={enProduccion ? 'alerta' : 'neutro'}>
-              {enProduccion ? 'producción' : 'sandbox'}
-            </Insignia>
+            {/* El indicador de entorno es también el acceso a la pantalla de
+                conexión: lo que te dice a qué Whop estás apuntando es lo que te
+                lleva a donde se cambia. Va como link y no como noveno ítem del
+                nav porque la barra ya está al límite de su ancho con ocho. */}
+            <Link
+              href="/admin/conexion"
+              aria-label="Conexión con Whop"
+              className="inline-flex items-center gap-1.5 rounded-ctrl px-1.5 py-1 transition-colors hover:bg-panel-sup2"
+            >
+              <Insignia tono={enProduccion ? 'alerta' : 'neutro'}>
+                {enProduccion ? 'producción' : 'sandbox'}
+              </Insignia>
+              <Gear size={15} className="text-tinta-3" aria-hidden="true" />
+            </Link>
             <CerrarSesionButton />
           </div>
         </div>
