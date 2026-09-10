@@ -11,6 +11,7 @@ tarjeta que se guardó en la compra del front.
 El plan, las decisiones y las tasks:
 [`tasks/checkout-whop/00-PLAN-CHECKOUT-WHOP.md`](tasks/checkout-whop/00-PLAN-CHECKOUT-WHOP.md).
 Cómo deployar: [`COMO-DEPLOYAR.md`](COMO-DEPLOYAR.md).
+Qué se hizo en cada sesión y qué se midió: [`BITACORA.md`](BITACORA.md).
 
 Este archivo es solo cómo levantarlo.
 
