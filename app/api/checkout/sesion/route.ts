@@ -110,7 +110,18 @@ export async function POST(req: Request): Promise<Response> {
             pr.created_at as producto_created_at, pr.updated_at as producto_updated_at
        from paginas pg
        join productos pr on pr.id = pg.producto_id
+       left join funnels f on f.id = pg.funnel_id
+      -- El paso está habilitado si SU switch está prendido Y, cuando pertenece a
+      -- un funnel, el switch del funnel también. Es un AND y no un OR: apagar el
+      -- funnel apaga sus pasos de una, que es la única razón por la que ese
+      -- interruptor existe. Sin esta condición el switch del funnel no cortaría
+      -- nada y daría falsa confianza justo en un incidente, que es peor que no
+      -- tenerlo.
+      --
+      -- El left join y no un join interno: una página suelta (sin funnel_id) tiene que
+      -- seguir funcionando, y con un join interno desaparecería.
       where pg.slug = $1 and pg.activo = true
+        and (pg.funnel_id is null or f.activo = true)
       limit 1`,
     [body.slug],
   );

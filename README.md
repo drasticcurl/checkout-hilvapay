@@ -160,12 +160,26 @@ Corren dentro de una transacción que se descarta: no dejan datos.
 Todo nace apagado a propósito. Encenderlo es explícito:
 
 ```sql
-select count(*) from paginas  where activo;   -- 0 hasta que lo prendas en el panel
+select count(*) from funnels  where activo;   -- 0 hasta que lo prendas en el panel
+select count(*) from paginas  where activo;   -- 0
 select count(*) from origenes where activo;   -- 0: sin esto el botón del funnel da 403
 ```
 
-El freno de emergencia es apagar `paginas.activo` desde el panel: corta el cobro al instante, sin
-redeploy.
+### El freno de emergencia
+
+Un paso cobra solo si **su** switch está prendido **y**, cuando pertenece a un funnel, el del funnel
+también. Es un AND, así que hay dos frenos y el grande es el del funnel:
+
+| Qué apagás | Qué corta |
+|---|---|
+| `funnels.activo` desde el panel | **toda la cadena de una**, al instante y sin redeploy |
+| `paginas.activo` de un paso | solo ese paso |
+
+Verificado: con el funnel apagado, `POST /api/upsell/cobrar` devuelve 404 y no crea ninguna fila en
+`cobros`, aunque el paso siga encendido.
+
+Una página que no pertenece a ningún funnel (las de antes de la migración 003) sigue gobernada solo
+por su propio switch.
 
 ## Los dominios
 

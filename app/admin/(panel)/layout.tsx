@@ -9,6 +9,7 @@ import { CerrarSesionButton } from './CerrarSesionButton';
 
 const LINKS = [
   { href: '/admin', label: 'Links de pago' },
+  { href: '/admin/funnels', label: 'Funnels' },
   { href: '/admin/catalogo', label: 'Catálogo de Whop' },
   { href: '/admin/productos', label: 'Productos' },
   { href: '/admin/origenes', label: 'Orígenes' },

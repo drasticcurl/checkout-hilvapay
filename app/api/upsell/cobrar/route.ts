@@ -26,6 +26,7 @@ import { NextResponse } from 'next/server';
 import { headersCors } from '@/lib/cors';
 import { resolverToken } from '@/lib/token';
 import { q, q1 } from '@/lib/db';
+import { resolverSiguienteUrl, resultadoDeEstado } from '@/lib/funnels';
 import { aplicarEstadoDePago, buscarCobro } from '@/lib/cobros';
 import { esFinal, mensajeParaComprador, clasificarDecline } from '@/lib/estado-pago';
 import { crearPagoOffSession, crearCheckoutConfiguration, WhopError } from '@/lib/whop';
@@ -100,10 +101,22 @@ export async function POST(req: Request): Promise<Response> {
   // acá, de la base. Si vinieran del body, cualquiera con el token podría
   // cobrarse un dólar y llevarse el producto.
   const pagina = await q1<PaginaCobro>(
-    `select pg.id, pg.tipo, pg.activo, pg.url_exito, pg.url_rechazo,
-            pg.producto_id, pr.whop_plan_id
+    `select pg.id, pg.tipo, pg.url_exito, pg.url_rechazo,
+            pg.producto_id, pr.whop_plan_id,
+            -- activo efectivo, no el de la fila: incluye el switch del funnel.
+            (pg.activo and (pg.funnel_id is null or f.activo)) as activo
        from paginas pg
        join productos pr on pr.id = pg.producto_id
+       left join funnels f on f.id = pg.funnel_id
+      -- El paso está habilitado si SU switch está prendido Y, cuando pertenece a
+      -- un funnel, el switch del funnel también. Es un AND y no un OR: apagar el
+      -- funnel apaga sus pasos de una, que es la única razón por la que ese
+      -- interruptor existe. Sin esta condición el switch del funnel no cortaría
+      -- nada y daría falsa confianza justo en un incidente, que es peor que no
+      -- tenerlo.
+      --
+      -- El left join y no un join interno: una página suelta (sin funnel_id) tiene que
+      -- seguir funcionando, y con un join interno desaparecería.
       where pg.slug = $1`,
     [slug],
   );
@@ -194,7 +207,7 @@ export async function POST(req: Request): Promise<Response> {
   // que impide el doble cobro real.
   if (cobro.whop_payment_id || esFinal(cobro.status)) {
     console.log(`[upsell/cobrar] orden ${orden.id}: cobro ${cobro.id} ya existía (status=${cobro.status}), no se llama a Whop`);
-    return json(respuestaDesdeCobro(cobro, pagina), 200);
+    return json(await respuestaDesdeCobro(cobro, orden.token), 200);
   }
 
   // ── 6. Llamar a Whop ─────────────────────────────────────────────────────
@@ -209,7 +222,7 @@ export async function POST(req: Request): Promise<Response> {
     });
   } catch (err) {
     return json(
-      await manejarErrorWhop(err, cobro, pagina, orden.whop_member_id, orden.whop_payment_method_id),
+      await manejarErrorWhop(err, cobro, pagina, orden.whop_member_id, orden.whop_payment_method_id, orden.token),
       200,
     );
   }
@@ -219,7 +232,7 @@ export async function POST(req: Request): Promise<Response> {
   cobro = (await buscarCobro(orden.id, pagina.id)) ?? { ...cobro, status };
 
   // ── 8. RespuestaCobro ────────────────────────────────────────────────────
-  return json(respuestaDesdeCobro(cobro, pagina), 200);
+  return json(await respuestaDesdeCobro(cobro, orden.token), 200);
 }
 
 /**
@@ -235,13 +248,16 @@ async function manejarErrorWhop(
   pagina: PaginaCobro,
   memberId: string,
   paymentMethodId: string,
+  // El token de la orden: hace falta para que las respuestas de acá puedan
+  // resolver el destino del funnel, igual que las del camino feliz.
+  token: string,
 ): Promise<RespuestaCobro> {
   if (!(err instanceof WhopError)) {
     // Un error que no vino de Whop (un bug nuestro, por ejemplo). No sabemos
     // si el request salió: procesando, y que el polling lo resuelva.
     console.error(`[upsell/cobrar] cobro ${cobro.id}: error no-WhopError llamando a Whop:`, err);
     await marcarProcesando(cobro.id);
-    return respuestaProcesando(cobro, pagina);
+    return respuestaProcesando(cobro, token);
   }
 
   if (err.indeterminado) {
@@ -250,7 +266,7 @@ async function manejarErrorWhop(
     // procesando y el polling (que consulta a Whop) lo resuelve.
     console.warn(`[upsell/cobrar] cobro ${cobro.id}: 409 de Whop, indeterminado → procesando`);
     await marcarProcesando(cobro.id);
-    return respuestaProcesando(cobro, pagina);
+    return respuestaProcesando(cobro, token);
   }
 
   if (err.reintentable) {
@@ -269,13 +285,13 @@ async function manejarErrorWhop(
       });
       const { status } = await aplicarEstadoDePago(cobro, pago);
       const actualizado = await buscarCobro(cobro.orden_id, cobro.pagina_id);
-      return respuestaDesdeCobro(actualizado ?? { ...cobro, status }, pagina);
+      return await respuestaDesdeCobro(actualizado ?? { ...cobro, status }, token);
     } catch {
       // El reintento también falló: procesando, nunca fallido, por la misma
       // razón que el 409.
       console.warn(`[upsell/cobrar] cobro ${cobro.id}: el reintento también falló → procesando`);
       await marcarProcesando(cobro.id);
-      return respuestaProcesando(cobro, pagina);
+      return respuestaProcesando(cobro, token);
     }
   }
 
@@ -290,7 +306,7 @@ async function manejarErrorWhop(
     // definición, este caso NO puede caer en el "fallido" genérico de abajo.
     console.warn(`[upsell/cobrar] cobro ${cobro.id}: timeout/red hablando con Whop → procesando`);
     await marcarProcesando(cobro.id);
-    return respuestaProcesando(cobro, pagina);
+    return respuestaProcesando(cobro, token);
   }
 
   // Cualquier otro 4xx: acá sí es un rechazo real y determinado (datos
@@ -303,7 +319,7 @@ async function manejarErrorWhop(
     [cobro.id, err.message.slice(0, 500)],
   );
   const actualizado = await buscarCobro(cobro.orden_id, cobro.pagina_id);
-  return respuestaDesdeCobro(actualizado ?? cobro, pagina);
+  return await respuestaDesdeCobro(actualizado ?? cobro, token);
 }
 
 async function marcarProcesando(cobroId: string): Promise<void> {
@@ -314,7 +330,13 @@ async function marcarProcesando(cobroId: string): Promise<void> {
   ]);
 }
 
-function respuestaProcesando(cobro: Cobro, _pagina: PaginaCobro): RespuestaCobro {
+/**
+ * Un cobro que quedó en `procesando` no tiene destino todavía: el loader sigue
+ * puleando `/api/cobros/[id]` hasta que se resuelva. Por eso no necesita el
+ * token, y se recibe igual para que la firma sea idéntica a las otras dos y
+ * nadie tenga que recordar cuál lo lleva.
+ */
+function respuestaProcesando(cobro: Cobro, _token: string): RespuestaCobro {
   return {
     cobroId: cobro.id,
     estado: 'procesando',
@@ -337,7 +359,7 @@ function respuestaProcesando(cobro: Cobro, _pagina: PaginaCobro): RespuestaCobro
  * confirmes") no describe lo que pasó acá. Por eso ese caso usa un mensaje
  * genérico en vez de reusar la clasificación de declines.
  */
-function respuestaDesdeCobro(cobro: Cobro, pagina: PaginaCobro): RespuestaCobro {
+async function respuestaDesdeCobro(cobro: Cobro, token: string): Promise<RespuestaCobro> {
   const pedirTarjeta = cobro.status === 'requiere_tarjeta';
   const mensaje =
     cobro.status === 'requiere_tarjeta'
@@ -350,10 +372,18 @@ function respuestaDesdeCobro(cobro: Cobro, pagina: PaginaCobro): RespuestaCobro 
           ? 'Estamos confirmando tu pago.'
           : null;
 
+  // El destino lo decide `lib/funnels.ts`: sabe si la página está en un funnel
+  // (y manda a la `url_externa` del paso destino o a la página de gracias) o si
+  // es una página suelta (y usa `url_exito`/`url_rechazo`). Antes esto leía las
+  // URLs de la página acá mismo, y además NO le pegaba el token — lo cual
+  // funcionaba solo mientras toda la cadena viviera en el mismo origen.
+  const resultado = resultadoDeEstado(cobro.status);
+  const siguienteUrl = resultado ? await resolverSiguienteUrl(cobro.pagina_id, resultado, token) : null;
+
   return {
     cobroId: cobro.id,
     estado: cobro.status,
-    siguienteUrl: cobro.status === 'pagado' ? pagina.url_exito : cobro.status === 'fallido' ? pagina.url_rechazo : null,
+    siguienteUrl,
     mensaje,
     pedirTarjeta,
     // El sessionIdRecuperacion de un cobro que ya requiere_tarjeta se resuelve

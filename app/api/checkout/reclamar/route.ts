@@ -15,9 +15,9 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { aplicarEstadoDePago, encolarSalida, guardarMetodoDePago, registrarCobroDelFront } from '@/lib/cobros';
 import { q1 } from '@/lib/db';
+import { resolverSiguienteUrl } from '@/lib/funnels';
 import { obtenerPago, WhopError } from '@/lib/whop';
-import type { Orden, PaginaConProducto } from '@/lib/tipos';
-import { armarUrlConToken } from '@/components/checkout/utils';
+import type { Orden } from '@/lib/tipos';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -145,26 +145,19 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
 
-  // 6. Resolver url_exito con ?ot=<token> agregado respetando el querystring
-  //    existente (new URL, nunca concatenación con "?"). En modo recuperación
-  //    es la url_exito de la página del upsell (paginaIdEfectiva), no la del
-  //    front (T03 §7 regla 5).
-  const paginaConUrl = await q1<Pick<PaginaConProducto, 'url_exito'>>(
-    'select url_exito from paginas where id = $1',
-    [paginaIdEfectiva],
-  );
-
-  let siguienteUrl: string | null = null;
-  if (paginaConUrl?.url_exito) {
-    try {
-      siguienteUrl = armarUrlConToken(paginaConUrl.url_exito, orden.token);
-    } catch {
-      // url_exito mal configurada en el panel: no es un error del comprador,
-      // que ya pagó. Se le devuelve null y que se quede donde está.
-      console.error(`[checkout/reclamar] url_exito inválida en pagina ${orden.pagina_id}: "${paginaConUrl.url_exito}"`);
-      siguienteUrl = null;
-    }
-  }
+  // 6. Resolver a dónde va el comprador, con el grafo del funnel.
+  //
+  //    Antes esto leía `url_exito` de la página directo. Ahora lo decide
+  //    `lib/funnels.ts`, que sabe si la página pertenece a un funnel (y entonces
+  //    manda a la `url_externa` del paso destino, o a la página de gracias) o si
+  //    es una página suelta de las de antes (y entonces usa `url_exito`, igual
+  //    que siempre). Los cuatro endpoints que resolvían esto por su cuenta usan
+  //    la misma función: si cada uno decidiera distinto, el comprador terminaría
+  //    en una página diferente según qué endpoint lo resolvió primero.
+  //
+  //    En modo recuperación se resuelve sobre la página del upsell
+  //    (`paginaIdEfectiva`), no la del front (T03 §7 regla 5).
+  const siguienteUrl = await resolverSiguienteUrl(paginaIdEfectiva, 'aceptado', orden.token);
 
   return NextResponse.json({ ok: true, siguienteUrl }, { status: 200 });
 }

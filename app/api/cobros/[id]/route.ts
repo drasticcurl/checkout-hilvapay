@@ -12,6 +12,7 @@
  */
 import { NextResponse } from 'next/server';
 import { q1 } from '@/lib/db';
+import { resolverSiguienteUrl, resultadoDeEstado } from '@/lib/funnels';
 import { aplicarEstadoDePago, encolarSalida } from '@/lib/cobros';
 import { esFinal, mensajeParaComprador, clasificarDecline } from '@/lib/estado-pago';
 import { obtenerPago, WhopError } from '@/lib/whop';
@@ -19,9 +20,6 @@ import type { Cobro, RespuestaCobro } from '@/lib/tipos';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-/** Lo mínimo de `paginas` que hace falta para armar `siguienteUrl`. */
-type PaginaDestino = { url_exito: string | null; url_rechazo: string | null };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -49,23 +47,28 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     return NextResponse.json({ error: 'pagina_inexistente' }, { status: 404 });
   }
 
-  const pagina = await q1<PaginaDestino>(
-    'select url_exito, url_rechazo from paginas where id = $1',
-    [cobro.pagina_id],
-  );
+  // El token de la orden, para pegárselo a la URL del paso siguiente. Va en la
+  // respuesta de un endpoint público, pero es el token de ESTA orden y el que
+  // pregunta ya tiene el id del cobro: no se filtra nada que no tuviera.
+  const orden = await q1<{ token: string }>('select token from ordenes where id = $1', [cobro.orden_id]);
+  if (!orden) {
+    // Un cobro sin orden no debería existir (la FK es `on delete cascade`), pero
+    // si pasa, es mejor un 404 que resolver un destino sin token.
+    return NextResponse.json({ error: 'pagina_inexistente' }, { status: 404 });
+  }
 
   // 1. Si ya está en un estado final, no hay que preguntarle nada a Whop: se
   // devuelve tal cual está. Es lo que hace que el polling pare de pegarle a la
   // API externa en cuanto el cobro se resolvió.
   if (esFinal(cobro.status)) {
-    return NextResponse.json(respuesta(cobro, pagina));
+    return NextResponse.json(await respuesta(cobro, orden.token));
   }
 
   // 2. Todavía no está resuelto. Si no hay whop_payment_id, no hay nada que
   // consultar (el cobro está en 'creando', el POST original puede seguir en
   // vuelo) — se devuelve el estado actual sin llamar a Whop.
   if (!cobro.whop_payment_id) {
-    return NextResponse.json(respuesta(cobro, pagina));
+    return NextResponse.json(await respuesta(cobro, orden.token));
   }
 
   // 3. Consultar a Whop y aplicar el estado con la misma función que usa el
@@ -91,7 +94,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     console.warn(`[cobros/${id}] no se pudo consultar a Whop, se devuelve el estado actual: ${motivo}`);
   }
 
-  return NextResponse.json(respuesta(cobro, pagina));
+  return NextResponse.json(await respuesta(cobro, orden.token));
 }
 
 /**
@@ -100,7 +103,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
  * 4xx de request), así que no se reusa `clasificarDecline(null)` — ese default
  * es 'pedir_tarjeta' y el mensaje de 3DS no describe lo que pasó.
  */
-function respuesta(cobro: Cobro, pagina: PaginaDestino | null): RespuestaCobro {
+async function respuesta(cobro: Cobro, token: string): Promise<RespuestaCobro> {
   const mensaje =
     cobro.status === 'requiere_tarjeta'
       ? mensajeParaComprador(clasificarDecline(cobro.decline_code))
@@ -112,15 +115,23 @@ function respuesta(cobro: Cobro, pagina: PaginaDestino | null): RespuestaCobro {
           ? 'Estamos confirmando tu pago.'
           : null;
 
+  // El destino lo decide `lib/funnels.ts`, no este endpoint. Antes leía
+  // `url_exito`/`url_rechazo` de la página directo, con dos consecuencias: no
+  // sabía nada de funnels, y no le pegaba el token a la URL —lo cual funcionaba
+  // solo mientras toda la cadena viviera en el mismo origen que guardó el
+  // sessionStorage.
+  //
+  // `resultadoDeEstado` devuelve null para `procesando`, `creando` y
+  // `requiere_tarjeta`: en esos casos todavía no hay destino y el loader sigue
+  // puleando. Ojo con `requiere_tarjeta`, que NO es un rechazo: el comprador
+  // quiso pagar y el banco pidió autenticación.
+  const resultado = resultadoDeEstado(cobro.status);
+  const siguienteUrl = resultado ? await resolverSiguienteUrl(cobro.pagina_id, resultado, token) : null;
+
   return {
     cobroId: cobro.id,
     estado: cobro.status,
-    siguienteUrl:
-      cobro.status === 'pagado'
-        ? pagina?.url_exito ?? null
-        : cobro.status === 'fallido'
-          ? pagina?.url_rechazo ?? null
-          : null,
+    siguienteUrl,
     mensaje,
     pedirTarjeta: cobro.status === 'requiere_tarjeta',
     // La sesión de recuperación no se crea acá en cada poll — evita gastar una
