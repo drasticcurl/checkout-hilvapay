@@ -37,6 +37,7 @@ import {
   resolverOrdenDePago,
 } from '@/lib/cobros';
 import { q, q1, qCount } from '@/lib/db';
+import { normalizarPago } from '@/lib/whop';
 import { FirmaInvalida, verificarWebhook, type EventoWhop } from '@/lib/whop-webhook';
 
 export const runtime = 'nodejs';
@@ -102,9 +103,21 @@ export async function POST(req: Request): Promise<Response> {
 
 async function procesar(evento: EventoWhop): Promise<void> {
   switch (evento.type) {
+    // `payment.created` es el que cierra la ventana del cobro huérfano: llega en
+    // cuanto Whop crea el pago, así que vincula el `whop_payment_id` al cobro
+    // ANTES de que se sepa si entró la plata. Sin él, un cobro cuyo POST se cortó
+    // a mitad de camino se queda sin id hasta que la reconciliación lo busque en
+    // el listado, 10 minutos después.
+    //
+    // `payment.authorized` y `payment.canceled` entran por el mismo camino:
+    // `mapearEstado` los resuelve por `substatus` y, si no reconoce el valor,
+    // devuelve 'procesando' — nunca 'fallido' por no saber.
+    case 'payment.created':
+    case 'payment.pending':
+    case 'payment.authorized':
     case 'payment.succeeded':
     case 'payment.failed':
-    case 'payment.pending':
+    case 'payment.canceled':
       await manejarPago(evento);
       break;
 
@@ -114,6 +127,12 @@ async function procesar(evento: EventoWhop): Promise<void> {
       break;
 
     case 'dispute.created':
+    case 'dispute.updated':
+    // `dispute_alert.created` es el aviso PREVIO de la red de tarjetas: llega
+    // antes de que la disputa exista y da margen para reembolsar y evitar el
+    // contracargo. Se anota en la misma columna porque para el panel es lo mismo
+    // que hay que mirar: hay plata en riesgo en este cobro.
+    case 'dispute_alert.created':
       await manejarDisputa(evento);
       break;
 
@@ -124,22 +143,34 @@ async function procesar(evento: EventoWhop): Promise<void> {
   }
 }
 
-type PagoEvento = {
-  id: string;
-  substatus?: string | null;
-  decline_code?: string | null;
-  failure_message?: string | null;
-  settlement_amount?: number | null;
-  currency?: string | null;
-  metadata?: Record<string, unknown> | null;
-  checkout_configuration_id?: string | null;
-  member?: { id: string } | null;
-  user?: { id: string; email: string | null } | null;
-  payment_method?: { id: string } | null;
-};
-
+/**
+ * El pago que llega en el evento, ya normalizado por `normalizarPago`.
+ *
+ * ── El bug que esto arregla ─────────────────────────────────────────────────
+ * Antes se leía `evento.data` directo, asumiendo la forma anidada
+ * (`member: {id}`, `payment_method: {id}`, `user: {email}`, `settlement_amount`).
+ * Esa es la forma que devuelve `GET /payments/{id}` con `Api-Version-Date:
+ * 2026-08-21-1` — verificado el 2026-09-10 contra la API real.
+ *
+ * Pero **la forma del payload del webhook la decide el `api_version_date` con el
+ * que se creó el webhook**, y el ejemplo de `payment.succeeded` de la doc
+ * (pinneado a `2026-09-09`) es PLANO: `member_id`, `payment_method_id`,
+ * `customer_email`, `plan_id`, y sin `settlement_amount` — el importe solo viene
+ * como `total: {amount: "50.00"}`.
+ *
+ * Con esa forma, el handler viejo guardaba:
+ *   · `whop_member_id` → NULL
+ *   · `whop_payment_method_id` → NULL  ← **cero upsells one-click**
+ *   · `email` → NULL
+ *   · `monto` → NULL, y entonces `armarPayloadIngest` omite la venta por "no
+ *     tiene monto": no llega al dashboard ni aparece en los números
+ *
+ * Y la versión no se puede elegir: crear el webhook por API pide el scope
+ * `developer:manage_webhook`, que en esta key está en **false** (verificado), así
+ * que se crea desde el dashboard y la versión la pone Whop.
+ */
 async function manejarPago(evento: EventoWhop): Promise<void> {
-  const pago = evento.data as PagoEvento;
+  const pago = normalizarPago(evento.data);
   if (!pago.id) throw new Error('el pago del evento no tiene id');
 
   // 1. Si ya existe un cobro para este pago, es un upsell que disparamos
@@ -171,7 +202,7 @@ async function manejarPago(evento: EventoWhop): Promise<void> {
     email: pago.user?.email,
   });
 
-  const cobro = await registrarCobroDelFront(orden, pago as PagoEvento & { id: string });
+  const cobro = await registrarCobroDelFront(orden, pago);
   if (!cobro) {
     throw new Error(`no se pudo registrar el cobro del front de la orden ${orden.id}`);
   }

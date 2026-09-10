@@ -24,7 +24,7 @@
  */
 import { q, q1 } from './db';
 import { MAX_INTENTOS } from './salidas';
-import { escaparHtml, mandarAlerta } from './telegram';
+import { escaparHtml, mandarAlerta, type Audiencia } from './telegram';
 
 /**
  * `grave`  → hay plata o un plazo en juego ahora mismo.
@@ -38,6 +38,15 @@ export type Alerta = {
   /** Clave semántica y estable. Es la PK de `alertas` y lo que deduplica. */
   clave: string;
   gravedad: Gravedad;
+  /**
+   * A quién le sirve esta alerta.
+   *
+   * `equipo` es solo para las ventas. Todo lo demás es `admin`: un vendedor que
+   * recibe "la cola de salidas tiene 3 filas quemadas" no puede hacer nada con
+   * eso, y aprende a ignorar al bot — con lo cual tampoco lee el aviso de la
+   * venta siguiente.
+   */
+  audiencia: Audiencia;
   titulo: string;
   /** Una o dos líneas con el número y qué hacer. Ya escapado para HTML. */
   detalle: string;
@@ -45,8 +54,17 @@ export type Alerta = {
 
 /** Los umbrales, todos juntos y en un solo lugar para poder discutirlos. */
 export const UMBRALES = {
-  /** Horas sin recibir un webhook antes de sospechar. Whop apaga a las 72 h. */
-  webhookMudoHoras: 6,
+  /**
+   * Horas sin recibir un webhook antes de sospechar.
+   *
+   * Bajo (2 h) a propósito. El webhook es la vía por la que se enteran las
+   * ventas: si se cae, la reconciliación las rescata igual pero 10 minutos más
+   * tarde y sin `payment.created`. Whop además deshabilita un endpoint que falla
+   * 72 h seguidas **sin reenviar los eventos de ese período**, así que enterarse
+   * al día siguiente puede costar ventas que ya no se pueden recuperar del
+   * histórico.
+   */
+  webhookMudoHoras: 2,
   /** Minutos que un cobro puede quedarse sin resolver antes de ser un problema. */
   cobroTrabadoMinutos: 45,
   /** Minutos de atraso de la cola antes de asumir que el cron está muerto. */
@@ -55,21 +73,38 @@ export const UMBRALES = {
   novedadesHoras: 24,
   /** Tope de avisos individuales por corrida. El resto entra en la siguiente. */
   maxNovedadesPorCorrida: 10,
+  /**
+   * Cuántos intentos de cobro seguidos sin ni una venta hacen sonar la alarma de
+   * "las ventas no funcionan".
+   *
+   * Tres y no uno: un decline aislado es normal —tarjeta sin fondos, 3DS que la
+   * persona abandona— y alertar por cada uno sería ruido puro. Tres intentos con
+   * cero éxitos en una hora ya no parece mala suerte: parece un plan mal
+   * asociado, una key vencida o el embed roto.
+   */
+  intentosSinVentaParaAlertar: 3,
 } as const;
 
 /**
  * Cuánto silencio después de mandar una alerta, por clave.
  *
- * `cola_atascada` tiene la ventana más corta (1 h) porque significa que el cron
- * no corre: es la única falla que se agrava sola con el tiempo, porque la cola
- * sigue creciendo. Las de una sola vez (disputa, reembolso, venta) tienen 30
- * días, que en la práctica es "nunca se repite": la ventana de detección es de
- * 24 h, así que el evento sale de la ventana mucho antes de que el silencio
- * expire.
+ * `webhook_mudo` tiene 10 minutos porque es la única alerta que el dueño pidió
+ * que insista: mientras el webhook no llegue, las ventas se registran solo por
+ * reconciliación y quiere verlo en el teléfono hasta arreglarlo. Con el cron cada
+ * 5 minutos, eso da un mensaje cada 10.
+ *
+ * `cola_atascada` va cortita por la razón contraria: no insiste porque sea
+ * urgente para el ojo, sino porque es la única falla que se agrava sola con el
+ * tiempo — la cola sigue creciendo.
+ *
+ * Las de una sola vez (disputa, reembolso, venta) tienen 30 días, que en la
+ * práctica es "nunca se repite": la ventana de detección es de 24 h, así que el
+ * evento sale de la ventana mucho antes de que el silencio expire.
  */
 export const SILENCIO_MINUTOS: Record<string, number> = {
-  webhook_mudo: 12 * 60,
-  cobros_trabados: 6 * 60,
+  webhook_mudo: 10,
+  ventas_fallando: 30,
+  cobros_trabados: 60,
   cola_quemada: 12 * 60,
   cola_atascada: 60,
   eventos_con_error: 12 * 60,
@@ -123,6 +158,9 @@ export type Sintomas = {
   colaAtrasada: number;
   /** Eventos de Whop que quedaron con error y sin procesar. */
   eventosConError: number;
+  /** Intentos de cobro en la última hora, y cuántos entraron. */
+  intentosUltimaHora: number;
+  pagadosUltimaHora: number;
   disputas: Novedad[];
   reembolsos: Novedad[];
   ventas: Novedad[];
@@ -142,7 +180,7 @@ export async function medir(): Promise<Sintomas> {
   const novedades = UMBRALES.novedadesHoras;
   const tope = UMBRALES.maxNovedadesPorCorrida;
 
-  const [eventos, cobrosVentana, trabados, cola, eventosError, disputas, reembolsos, ventas] =
+  const [eventos, cobrosVentana, trabados, cola, eventosError, ultimaHora, disputas, reembolsos, ventas] =
     await Promise.all([
       q1<{ ultimo: Date | null; total: string }>(
         'select max(recibido_at) as ultimo, count(*)::text as total from whop_eventos',
@@ -170,6 +208,15 @@ export async function medir(): Promise<Sintomas> {
       ),
       q1<{ total: string }>(
         'select count(*)::text as total from whop_eventos where error is not null and procesado_at is null',
+      ),
+      // La ventana de "las ventas no funcionan" es fija en una hora y no sale de
+      // UMBRALES: es la unidad en la que se piensa el problema ("hace una hora que
+      // no entra nada"), y atarla a otro umbral haría que cambiar uno mueva el otro.
+      q1<{ intentos: string; pagados: string }>(
+        `select count(*)::text as intentos,
+                count(*) filter (where status = 'pagado')::text as pagados
+           from cobros
+          where created_at > now() - interval '1 hour'`,
       ),
       q<Novedad>(
         `select ${COLS_NOVEDAD} ${JOIN_NOVEDAD}
@@ -202,6 +249,8 @@ export async function medir(): Promise<Sintomas> {
     colaQuemada: Number(cola?.quemada ?? 0),
     colaAtrasada: Number(cola?.atrasada ?? 0),
     eventosConError: Number(eventosError?.total ?? 0),
+    intentosUltimaHora: Number(ultimaHora?.intentos ?? 0),
+    pagadosUltimaHora: Number(ultimaHora?.pagados ?? 0),
     disputas,
     reembolsos,
     ventas,
@@ -246,13 +295,34 @@ export function evaluar(s: Sintomas, ahora: Date = new Date()): Alerta[] {
     alertas.push({
       clave: 'webhook_mudo',
       gravedad: 'grave',
+      audiencia: 'admin',
       titulo: 'El webhook de Whop no está llegando',
       detalle: funcionóYSeCalló
         ? `Último evento recibido hace ${Math.floor(horasSinEvento!)} h. ` +
-          'Whop deshabilita un endpoint que falla 72 h seguidas y NO reenvía los eventos de ese período. ' +
-          'Revisá Developer → Webhooks en el dashboard y que Cloudflare no esté desafiando el path.'
+          'Las ventas se siguen registrando por reconciliación, con hasta 10 min de atraso. ' +
+          'Whop deshabilita un endpoint que falla 72 h seguidas y NO reenvía los eventos de ese período: ' +
+          'revisá Developer → Webhooks en el dashboard y que Cloudflare no esté desafiando el path.'
         : `${s.cobrosEnLaVentana} cobro(s) en las últimas ${UMBRALES.webhookMudoHoras} h y ningún webhook recibido nunca. ` +
           'Probablemente el webhook todavía no apunta acá.',
+    });
+  }
+
+  // ── Las ventas no entran ───────────────────────────────────────────────────
+  //
+  // La alerta que el dueño pidió explícitamente: "que marque que no funcionan las
+  // ventas". No mira el webhook ni la infraestructura, mira el resultado — si
+  // hubo intentos y ninguno entró, algo está roto aunque todo lo demás parezca
+  // sano (un plan mal asociado, la key vencida, el embed roto).
+  if (s.intentosUltimaHora >= UMBRALES.intentosSinVentaParaAlertar && s.pagadosUltimaHora === 0) {
+    alertas.push({
+      clave: 'ventas_fallando',
+      gravedad: 'grave',
+      audiencia: 'admin',
+      titulo: 'Las ventas no están entrando',
+      detalle:
+        `${s.intentosUltimaHora} intentos de cobro en la última hora y NINGUNO entró. ` +
+        'Un decline aislado es normal; esto no. Mirá /admin/numeros → "Por qué rebotaron": ' +
+        'un solo código repitiéndose es configuración, no tarjetas.',
     });
   }
 
@@ -264,6 +334,7 @@ export function evaluar(s: Sintomas, ahora: Date = new Date()): Alerta[] {
     alertas.push({
       clave: 'cobros_trabados',
       gravedad: 'grave',
+      audiencia: 'admin',
       titulo: `${s.cobrosTrabados} cobro(s) sin resolver`,
       detalle:
         `Llevan más de ${UMBRALES.cobroTrabadoMinutos} min en 'creando' o 'procesando'.${antiguedad} ` +
@@ -277,6 +348,7 @@ export function evaluar(s: Sintomas, ahora: Date = new Date()): Alerta[] {
     alertas.push({
       clave: 'cola_quemada',
       gravedad: 'grave',
+      audiencia: 'admin',
       titulo: `${s.colaQuemada} venta(s) que nunca salieron`,
       detalle:
         `Agotaron los ${MAX_INTENTOS} reintentos de la cola 'salidas' y no se van a reintentar más. ` +
@@ -288,6 +360,7 @@ export function evaluar(s: Sintomas, ahora: Date = new Date()): Alerta[] {
     alertas.push({
       clave: 'cola_atascada',
       gravedad: 'grave',
+      audiencia: 'admin',
       titulo: 'La cola no se está drenando',
       detalle:
         `${s.colaAtrasada} fila(s) vencidas hace más de ${UMBRALES.colaAtascadaMinutos} min. ` +
@@ -299,6 +372,7 @@ export function evaluar(s: Sintomas, ahora: Date = new Date()): Alerta[] {
     alertas.push({
       clave: 'eventos_con_error',
       gravedad: 'aviso',
+      audiencia: 'admin',
       titulo: `${s.eventosConError} evento(s) de Whop con error`,
       detalle:
         'Quedaron sin procesar. Se pueden reintentar con "Send event" desde el dashboard de Whop. ' +
@@ -311,10 +385,14 @@ export function evaluar(s: Sintomas, ahora: Date = new Date()): Alerta[] {
   // La clave lleva el id del cobro: así cada disputa avisa UNA vez y no se
   // mezcla con la siguiente. Una alerta agregada ("hay 3 disputas") avisaría de
   // la segunda y la tercera solo si el contador cambia justo cuando se mira.
+  //
+  // Disputas y reembolsos van SOLO al admin: se resuelven en el dashboard de
+  // Whop, no hay nada que el equipo pueda hacer con esa información.
   for (const d of s.disputas) {
     alertas.push({
       clave: `disputa:${d.cobroId}`,
       gravedad: 'grave',
+      audiencia: 'admin',
       titulo: 'Disputa nueva',
       detalle:
         `${plata(d)} — ${escaparHtml(d.producto)} (${escaparHtml(d.slug)})\n` +
@@ -327,16 +405,19 @@ export function evaluar(s: Sintomas, ahora: Date = new Date()): Alerta[] {
     alertas.push({
       clave: `reembolso:${r.cobroId}`,
       gravedad: 'aviso',
+      audiencia: 'admin',
       titulo: 'Reembolso',
       detalle: `${plata(r)} — ${escaparHtml(r.producto)} (${escaparHtml(r.slug)})\nComprador: ${escaparHtml(r.email ?? 'sin email')}`,
     });
   }
 
+  // La ÚNICA alerta que ve el equipo.
   if (avisarVentas()) {
     for (const v of s.ventas) {
       alertas.push({
         clave: `venta:${v.cobroId}`,
         gravedad: 'info',
+        audiencia: 'equipo',
         titulo: 'Venta',
         detalle: `${plata(v)} — ${escaparHtml(v.producto)} (${escaparHtml(v.slug)})\n${escaparHtml(v.email ?? 'sin email')}`,
       });
@@ -437,7 +518,7 @@ export async function vigilar(ahora: Date = new Date()): Promise<ResultadoVigila
     }
 
     const veces = (previa?.veces ?? 0) + 1;
-    const envio = await mandarAlerta(formatearMensaje(alerta, veces));
+    const envio = await mandarAlerta(formatearMensaje(alerta, veces), alerta.audiencia);
 
     if (envio.enviados === 0) {
       // Sin canal (falta el token, no hay destinatarios, Telegram caído): NO se

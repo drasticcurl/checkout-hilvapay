@@ -67,7 +67,7 @@ curl -H "Authorization: Bearer $CRON_SECRET" localhost:3020/api/cron/vigilar
 |---|---|---|
 | `salidas` | 1 min | drena la cola: reporta las ventas al panel y manda los emails de entrega |
 | `reconciliar` | 10 min | le pregunta a Whop por los cobros colgados y los cierra. Detecta reembolsos y disputas **sin depender del webhook** |
-| `vigilar` | 15 min | avisa por Telegram si algo se rompió |
+| `vigilar` | 5 min | avisa por Telegram: ventas al equipo, lo técnico solo al admin |
 
 En producción los llama el crontab con `deploy/pegar-cron.sh` (ver `deploy/cron.hilvapay`).
 
@@ -175,11 +175,17 @@ Dashboard → **Developer → Webhooks** → Create.
 - Eventos:
 
 ```
+payment.created
 payment.succeeded
 payment.failed
+payment.pending
 refund.created
 dispute.created
 ```
+
+`payment.created` no es de relleno: llega en cuanto Whop crea el pago y vincula el `payment_id` al
+cobro antes de que se sepa si entró la plata. Sin él, un cobro cuyo POST se cortó a mitad de camino se
+queda sin id hasta que la reconciliación lo busque en el listado, 10 minutos después.
 
 Copiá el signing secret completo, con el prefijo `ws_`, **sin recodificarlo en base64**.
 

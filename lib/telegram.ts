@@ -22,10 +22,22 @@
  *
  * Si un chat_id aparece en los dos lados, se manda UNA vez (se deduplica por
  * chat_id antes de enviar).
+ *
+ * ── Las dos audiencias ──────────────────────────────────────────────────────
+ *   `equipo` → las ventas. Las ve todo el mundo.
+ *   `admin`  → lo técnico. Solo el chat del env var y los destinatarios con
+ *              `recibe_tecnicas`.
+ *
+ * La razón no es privacidad, es que el canal siga sirviendo: un vendedor que
+ * recibe "la cola de salidas tiene 3 filas quemadas" aprende a ignorar al bot, y
+ * entonces tampoco lee el mensaje de la venta.
  */
 import { q } from './db';
 
 const TIMEOUT_MS = 10_000;
+
+/** Quién tiene que recibir un mensaje. */
+export type Audiencia = 'equipo' | 'admin';
 
 /** Un destinatario ya resuelto, listo para recibir. */
 export type Destino = {
@@ -74,10 +86,13 @@ export function escaparHtml(texto: string): string {
 }
 
 /**
- * Los chats a los que hay que mandar. El admin del env var primero, y sin
- * repetir un chat_id que además esté en la tabla.
+ * Los chats a los que hay que mandar, según la audiencia. El admin del env var
+ * primero, y sin repetir un chat_id que además esté en la tabla.
+ *
+ * Para `admin` se filtra por `recibe_tecnicas` en el SQL y no en JS: así una fila
+ * que no corresponde no llega ni a salir de la base.
  */
-export async function destinos(): Promise<Destino[]> {
+export async function destinos(audiencia: Audiencia = 'equipo'): Promise<Destino[]> {
   const lista: Destino[] = [];
   const vistos = new Set<string>();
 
@@ -88,7 +103,12 @@ export async function destinos(): Promise<Destino[]> {
   }
 
   const filas = await q<{ id: string; chat_id: string; nombre: string | null }>(
-    'select id, chat_id, nombre from destinatarios_alerta where activo order by created_at asc',
+    `select id, chat_id, nombre
+       from destinatarios_alerta
+      where activo
+        and ($1 = 'equipo' or recibe_tecnicas)
+      order by created_at asc`,
+    [audiencia],
   );
 
   for (const f of filas) {
@@ -149,20 +169,23 @@ export async function mandarA(chatId: string, texto: string): Promise<ResultadoE
 }
 
 /**
- * Manda el mensaje a todos los destinos activos.
+ * Manda el mensaje a todos los destinos de esa audiencia.
  *
  * `Promise.all` y no un `for` secuencial: son dos o tres chats y el vigilante
  * corre dentro del presupuesto de un cron. Con cinco destinatarios y un timeout
  * de 10 s cada uno, en serie serían 50 s de peor caso.
  */
-export async function mandarAlerta(texto: string): Promise<ResultadoMensaje> {
+export async function mandarAlerta(
+  texto: string,
+  audiencia: Audiencia = 'equipo',
+): Promise<ResultadoMensaje> {
   if (!token()) {
     // Sin token no hay nada que hacer, y no es un error: el módulo tiene que
     // poder deployarse antes de que exista el bot.
     return { intentados: 0, enviados: 0, fallidos: 0, motivo: 'sin_token', detalle: [] };
   }
 
-  const lista = await destinos();
+  const lista = await destinos(audiencia);
   if (lista.length === 0) {
     return { intentados: 0, enviados: 0, fallidos: 0, motivo: 'sin_destinatarios', detalle: [] };
   }

@@ -117,10 +117,18 @@ export default async function AlertasPage(): Promise<JSX.Element> {
           <li>Aparece en esta lista. Con <Codigo>/baja</Codigo> se saca solo, y con <Codigo>/estado</Codigo> pregunta cómo viene todo.</li>
         </ol>
         <p className="text-[12px] leading-relaxed text-tinta-3">
-          Se avisa: ventas, reembolsos, disputas, cobros trabados de más de {UMBRALES.cobroTrabadoMinutos}{' '}
-          minutos, la cola sin drenar y el webhook de Whop en silencio por más de{' '}
-          {UMBRALES.webhookMudoHoras} horas. Cada alerta se repite como máximo una vez por ventana de
-          silencio, así que un problema abierto no manda 96 mensajes por día.
+          <strong className="font-semibold text-tinta-2">Las ventas las ve todo el mundo.</strong> Lo
+          técnico —el webhook caído, la cola atascada, cobros trabados, reembolsos y disputas— va solo a{' '}
+          <span className="font-mono">TELEGRAM_CHAT_ID_ADMIN</span> y a quien tenga la columna
+          &ldquo;Técnicas&rdquo; prendida. No es privacidad: es que alguien que recibe &ldquo;la cola tiene
+          3 filas quemadas&rdquo; aprende a ignorar al bot, y después tampoco lee el aviso de la venta.
+        </p>
+        <p className="text-[12px] leading-relaxed text-tinta-3">
+          Cada alerta se repite como máximo una vez por ventana de silencio, así que un problema abierto
+          no manda 96 mensajes por día. La excepción es el webhook caído, que insiste cada 10 minutos
+          hasta que se arregle: mientras no llegue, las ventas se registran solo por reconciliación.
+          Cobros trabados de más de {UMBRALES.cobroTrabadoMinutos} min y webhook en silencio por más de{' '}
+          {UMBRALES.webhookMudoHoras} h.
         </p>
       </Tarjeta>
 
@@ -142,7 +150,8 @@ export default async function AlertasPage(): Promise<JSX.Element> {
             <tr>
               <Th>Nombre</Th>
               <Th>Chat</Th>
-              <Th>Estado</Th>
+              <Th>Ventas</Th>
+              <Th>Técnicas</Th>
               <Th>Último aviso entregado</Th>
               <Th>Último error</Th>
               <Th className="text-right">Quitar</Th>
@@ -156,7 +165,22 @@ export default async function AlertasPage(): Promise<JSX.Element> {
                   <Codigo>{d.chat_id}</Codigo>
                 </Td>
                 <Td>
-                  <SwitchDestinatario id={d.id} activo={d.activo} nombre={d.nombre ?? d.chat_id} />
+                  <SwitchDestinatario
+                    id={d.id}
+                    campo="activo"
+                    valorInicial={d.activo}
+                    nombre={d.nombre ?? d.chat_id}
+                    etiquetas={['Recibe', 'En pausa']}
+                  />
+                </Td>
+                <Td>
+                  <SwitchDestinatario
+                    id={d.id}
+                    campo="recibeTecnicas"
+                    valorInicial={d.recibe_tecnicas}
+                    nombre={d.nombre ?? d.chat_id}
+                    etiquetas={['También', 'No']}
+                  />
                 </Td>
                 <Td className="whitespace-nowrap text-tinta-2">{fechaCorta(d.ultimo_ok_at) ?? <SinDato />}</Td>
                 <Td className="max-w-[18rem] truncate text-[12px] text-peligro-oscuro">

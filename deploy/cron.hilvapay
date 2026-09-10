@@ -12,19 +12,21 @@
 #   * * * * *      /api/cron/salidas       drena la cola: reporta las ventas y
 #                                          manda los emails de entrega
 #   */10 * * * *   /api/cron/reconciliar   cierra los cobros que quedaron a medias
-#   */15 * * * *   /api/cron/vigilar       avisa por Telegram si algo se rompió
+#   */5 * * * *    /api/cron/vigilar       avisa por Telegram si algo se rompió
 #
-# ── Por qué el primero corre cada minuto y los otros no ──────────────────────
+# ── Por qué cada uno corre cuando corre ──────────────────────────────────────
 # La cola es trabajo ya decidido: cuanto antes se drene, antes recibe su producto
 # el comprador. La reconciliación, en cambio, hace hasta dos llamadas a la API de
 # Whop por cobro, y lo que llega hasta ella es la EXCEPCIÓN — el camino normal lo
 # resuelven el polling del browser y el webhook en segundos. Cada minuto gastaría
 # cuota para encontrar, casi siempre, cero filas.
 #
-# Con 10 minutos, el peor caso para alguien que cerró la pestaña es que su email
-# de entrega salga 10 minutos tarde. Con 15 para el vigilante, el peor caso es
-# enterarse de una disputa un cuarto de hora después — y las ventanas de silencio
-# de `lib/alertas.ts` están calculadas sobre esa frecuencia.
+# El vigilante cada 5 minutos: no le pega a Whop (son consultas cortas a la base) y
+# la alerta del webhook caído tiene 10 minutos de silencio para poder insistir.
+# Cuántos mensajes salen lo decide el dedupe de `lib/alertas.ts`, no el cron.
+#
+# Con 10 minutos de reconciliación, el peor caso para alguien que cerró la pestaña
+# es que su email de entrega salga 10 minutos tarde.
 #
 # ── Los logs van separados ───────────────────────────────────────────────────
 # `salidas.log` tiene una línea por minuto y ahogaría a los otros dos, que son
@@ -113,10 +115,19 @@
 # había recibido nada. Después, `errores`.
 */10 * * * * /srv/hilvapay/repo/deploy/pegar-cron.sh /api/cron/reconciliar >> /var/log/hilvapay/reconciliar.log 2>&1
 
-# Vigilar y avisar por Telegram, cada 15 minutos.
+# Vigilar y avisar por Telegram, cada 5 minutos.
+#
+# Cada 5 y no cada 15: la alerta del webhook caído tiene 10 minutos de silencio
+# porque tiene que insistir mientras el problema esté abierto, y con un cron cada
+# 15 la cadencia real sería de 15. Las demás alertas tienen ventanas largas, así
+# que subir la frecuencia no las hace más ruidosas — el dedupe de `lib/alertas.ts`
+# es lo que gobierna cuántos mensajes salen, no el cron.
+#
+# El costo de correrlo más seguido es una docena de consultas cortas a la base;
+# no le pega a la API de Whop.
 #
 # En el log, `sinCanal` > 0 es el caso a revisar: detectó un problema y no pudo
 # avisarlo (falta TELEGRAM_BOT_TOKEN, nadie dado de alta, Telegram caído). Esas
 # alertas NO quedan marcadas como enviadas, así que se reintentan en la corrida
 # siguiente en cuanto haya canal.
-*/15 * * * * /srv/hilvapay/repo/deploy/pegar-cron.sh /api/cron/vigilar >> /var/log/hilvapay/vigilar.log 2>&1
+*/5 * * * * /srv/hilvapay/repo/deploy/pegar-cron.sh /api/cron/vigilar >> /var/log/hilvapay/vigilar.log 2>&1

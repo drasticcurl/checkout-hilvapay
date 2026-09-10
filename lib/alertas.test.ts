@@ -21,6 +21,8 @@ function sanos(cambios: Partial<Sintomas> = {}): Sintomas {
     colaQuemada: 0,
     colaAtrasada: 0,
     eventosConError: 0,
+    intentosUltimaHora: 0,
+    pagadosUltimaHora: 0,
     disputas: [],
     reembolsos: [],
     ventas: [],
@@ -163,10 +165,15 @@ describe('evaluar', () => {
 });
 
 describe('silencioDe', () => {
-  it('la cola atascada tiene la ventana más corta de todas', () => {
-    // Es la única falla que se agrava sola: la cola sigue creciendo.
-    expect(silencioDe('cola_atascada')).toBe(60);
-    expect(silencioDe('cola_atascada')).toBeLessThan(silencioDe('webhook_mudo'));
+  it('el webhook mudo insiste cada 10 minutos', () => {
+    // Es la única alerta que el dueño pidió que repita: mientras el webhook no
+    // llegue, las ventas se registran solo por reconciliación. Con el cron cada
+    // 5 min, 10 minutos de silencio dan un mensaje cada 10.
+    expect(silencioDe('webhook_mudo')).toBe(10);
+  });
+
+  it('las ventas caídas insisten cada media hora', () => {
+    expect(silencioDe('ventas_fallando')).toBe(30);
   });
 
   it('las claves con id usan la ventana de su prefijo', () => {
@@ -175,8 +182,66 @@ describe('silencioDe', () => {
   });
 
   it('una clave desconocida cae en el default y no en cero', () => {
-    // Cero silencio sería mandar la misma alerta cada 15 minutos.
+    // Cero silencio sería mandar la misma alerta cada 5 minutos.
     expect(silencioDe('algo_que_no_existe')).toBeGreaterThan(0);
+  });
+});
+
+describe('audiencia', () => {
+  const audienciaDe = (s: Sintomas, clave: string) =>
+    evaluar(s, AHORA).find((a) => a.clave === clave)?.audiencia;
+
+  it('la venta es lo ÚNICO que ve el equipo', () => {
+    const s = sanos({
+      ventas: [novedad({ cobroId: 'v1' })],
+      colaQuemada: 1,
+      colaAtrasada: 1,
+      cobrosTrabados: 1,
+      eventosConError: 1,
+      eventosTotales: 5,
+      ultimoEventoAt: hace(9),
+      disputas: [novedad({ cobroId: 'd1' })],
+      reembolsos: [novedad({ cobroId: 'r1' })],
+    });
+    const paraEquipo = evaluar(s, AHORA).filter((a) => a.audiencia === 'equipo');
+    expect(paraEquipo.map((a) => a.clave)).toEqual(['venta:v1']);
+  });
+
+  it('lo técnico va solo al admin', () => {
+    expect(audienciaDe(sanos({ colaQuemada: 1 }), 'cola_quemada')).toBe('admin');
+    expect(audienciaDe(sanos({ colaAtrasada: 1 }), 'cola_atascada')).toBe('admin');
+    expect(audienciaDe(sanos({ cobrosTrabados: 1 }), 'cobros_trabados')).toBe('admin');
+    expect(audienciaDe(sanos({ eventosConError: 1 }), 'eventos_con_error')).toBe('admin');
+    expect(audienciaDe(sanos({ eventosTotales: 3, ultimoEventoAt: hace(9) }), 'webhook_mudo')).toBe('admin');
+  });
+
+  it('los reembolsos y disputas también son del admin: se resuelven en Whop', () => {
+    expect(audienciaDe(sanos({ disputas: [novedad({ cobroId: 'd1' })] }), 'disputa:d1')).toBe('admin');
+    expect(audienciaDe(sanos({ reembolsos: [novedad({ cobroId: 'r1' })] }), 'reembolso:r1')).toBe('admin');
+  });
+});
+
+describe('ventas_fallando', () => {
+  it('avisa con 3 intentos y ninguno pagado', () => {
+    const alertas = evaluar(sanos({ intentosUltimaHora: 3, pagadosUltimaHora: 0 }), AHORA);
+    const a = alertas.find((x) => x.clave === 'ventas_fallando');
+    expect(a?.gravedad).toBe('grave');
+    expect(a?.audiencia).toBe('admin');
+    expect(a?.detalle).toContain('3 intentos');
+  });
+
+  it('con 2 intentos no avisa: un decline aislado es normal', () => {
+    expect(claves(sanos({ intentosUltimaHora: 2, pagadosUltimaHora: 0 }))).not.toContain('ventas_fallando');
+  });
+
+  it('si entró aunque sea una venta, no avisa', () => {
+    // 9 rechazos y 1 venta es una tasa de aprobación mala, no un sistema roto.
+    // Eso se mira en /admin/numeros, no se grita por Telegram.
+    expect(claves(sanos({ intentosUltimaHora: 10, pagadosUltimaHora: 1 }))).not.toContain('ventas_fallando');
+  });
+
+  it('sin intentos no avisa: no hay tráfico, no hay problema', () => {
+    expect(claves(sanos({ intentosUltimaHora: 0, pagadosUltimaHora: 0 }))).toEqual([]);
   });
 });
 
@@ -197,9 +262,18 @@ describe('debeEnviar', () => {
 
   it('cada clave usa SU ventana, no una global', () => {
     const previa = (clave: string) => ({ clave, ultimo_envio_at: hace(2), veces: 1 });
-    // 2 h pasaron: alcanza para la cola atascada (1 h) y no para el webhook (12 h).
-    expect(debeEnviar(previa('cola_atascada'), 'cola_atascada', AHORA)).toBe(true);
-    expect(debeEnviar(previa('webhook_mudo'), 'webhook_mudo', AHORA)).toBe(false);
+    // Pasaron 2 h: de sobra para el webhook mudo (10 min, insiste) y muy poco
+    // para la cola quemada (12 h, no hace falta repetirla).
+    expect(debeEnviar(previa('webhook_mudo'), 'webhook_mudo', AHORA)).toBe(true);
+    expect(debeEnviar(previa('cola_quemada'), 'cola_quemada', AHORA)).toBe(false);
+  });
+
+  it('el webhook mudo NO se repite antes de sus 10 minutos', () => {
+    // El cron corre cada 5 minutos: sin esta guarda, la alerta saldría en cada
+    // corrida y serían 12 mensajes por hora.
+    const hace5min = new Date(AHORA.getTime() - 5 * 60_000);
+    const previa = { clave: 'webhook_mudo', ultimo_envio_at: hace5min, veces: 3 };
+    expect(debeEnviar(previa, 'webhook_mudo', AHORA)).toBe(false);
   });
 
   it('una disputa ya avisada no se repite un mes después de detectarse', () => {
@@ -212,6 +286,7 @@ describe('formatearMensaje', () => {
   const alerta = {
     clave: 'cola_quemada',
     gravedad: 'grave' as const,
+    audiencia: 'admin' as const,
     titulo: '2 ventas que nunca salieron',
     detalle: 'detalle cualquiera',
   };

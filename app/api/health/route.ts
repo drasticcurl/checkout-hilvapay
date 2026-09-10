@@ -57,6 +57,7 @@ const MIGRACIONES_ESPERADAS = [
   '002_config_email.sql',
   '003_funnels.sql',
   '004_alertas.sql',
+  '005_alertas_tecnicas.sql',
 ];
 
 /**

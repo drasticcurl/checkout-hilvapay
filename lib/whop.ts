@@ -173,6 +173,9 @@ export type PagoWhop = {
   payment_method: { id: string; payment_method_type: string | null } | null;
   plan: { id: string } | null;
   paid_at: string | null;
+  /** true cuando Whop puede reintentar el cobro solo. Importa para no cobrar dos veces. */
+  retryable: boolean;
+  next_payment_attempt: string | null;
   /**
    * Cuándo se reembolsó y cuándo se alertó una disputa. Los dos son OPCIONALES
    * en el tipo (`?`) y no `| null` a secas: no estaban en la lista de campos que
@@ -187,10 +190,144 @@ export type PagoWhop = {
    */
   refunded_at?: string | null;
   dispute_alerted_at?: string | null;
-  /** true cuando Whop puede reintentar el cobro solo. Importa para no cobrar dos veces. */
-  retryable: boolean;
-  next_payment_attempt: string | null;
+  /**
+   * Link para que el comprador complete el 3DS de un pago que falló pidiendo
+   * autenticación. Viene en `payment.failed` y en `GET /payments/{id}`; los
+   * listados NO lo traen.
+   *
+   * Es `null` cuando la recuperación no está disponible. Todavía no se usa: es
+   * la pieza que le falta al flujo de `requiere_tarjeta` para poder mandarle a la
+   * persona un link en vez de pedirle la tarjeta de nuevo.
+   */
+  recovery_url?: string | null;
 };
+
+// ── Normalización del objeto Payment ────────────────────────────────────────
+
+/**
+ * Convierte un importe de Whop a número, venga como venga.
+ *
+ * Whop devuelve los importes de tres formas distintas según el endpoint y la
+ * versión: número suelto (`12.18`), objeto (`{amount: "50.00", currency: "usd"}`)
+ * o string. Verificado el 2026-09-10: `GET /payments/{id}` con
+ * `Api-Version-Date: 2026-08-21-1` devuelve `total: 12.18` (número), y el ejemplo
+ * de `payment.succeeded` de la doc —pinneado a `2026-09-09`— devuelve
+ * `total: {amount: "50.00", ...}` (objeto).
+ */
+function montoDe(valor: unknown): number | null {
+  if (typeof valor === 'number' && Number.isFinite(valor)) return valor;
+  if (typeof valor === 'string' && valor.trim() !== '') {
+    const n = Number(valor);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (valor && typeof valor === 'object' && 'amount' in valor) {
+    return montoDe((valor as { amount: unknown }).amount);
+  }
+  return null;
+}
+
+function idDe(plano: unknown, anidado: unknown): string | null {
+  if (typeof plano === 'string' && plano) return plano;
+  if (anidado && typeof anidado === 'object' && 'id' in anidado) {
+    const id = (anidado as { id: unknown }).id;
+    if (typeof id === 'string' && id) return id;
+  }
+  return null;
+}
+
+function texto(valor: unknown): string | null {
+  return typeof valor === 'string' && valor !== '' ? valor : null;
+}
+
+/**
+ * Lleva CUALQUIER payload de pago de Whop a la forma que usa el resto del código.
+ *
+ * ── Por qué existe: el bug que evita ────────────────────────────────────────
+ * La forma del objeto Payment **depende del `api_version_date`** con el que se
+ * consulta o con el que se creó el webhook. Medido el 2026-09-10:
+ *
+ * | Campo | `GET /payments/{id}` con `2026-08-21-1` | `payment.succeeded` de la doc (`2026-09-09`) |
+ * |---|---|---|
+ * | member | `member: {id}` | `member_id` plano |
+ * | método de pago | `payment_method: {id}` | `payment_method_id` plano |
+ * | email | `user: {email}` | `customer_email` en la raíz |
+ * | plan | `plan: {id}` | `plan_id` plano |
+ * | importe | `settlement_amount: 12.18` | **no existe**; solo `total: {amount}` |
+ *
+ * El handler del webhook leía únicamente la forma anidada. Con un webhook que
+ * entregue la forma plana, eso significa: `whop_member_id` NULL,
+ * `whop_payment_method_id` NULL —o sea **cero upsells one-click**— y `monto`
+ * NULL, que además hace que la venta no se reporte al panel (`armarPayloadIngest`
+ * la omite por "no tiene monto") y que no aparezca en los números.
+ *
+ * Y no se puede elegir la versión del webhook: crearlo por API requiere el scope
+ * `developer:manage_webhook`, que en esta key está en **false** (verificado), así
+ * que se crea desde el dashboard y la versión la pone Whop.
+ *
+ * Por eso esto no es defensa teórica: es la única forma de que el webhook
+ * registre bien una venta sin depender de qué versión le tocó.
+ */
+export function normalizarPago(crudo: unknown): PagoWhop {
+  const p = (crudo ?? {}) as Record<string, unknown>;
+
+  const memberId = idDe(p.member_id, p.member);
+  const paymentMethodId = idDe(p.payment_method_id, p.payment_method);
+  const userAnidado = (p.user ?? null) as Record<string, unknown> | null;
+  const userId = idDe(p.user_id, p.user);
+  const email = texto(p.customer_email) ?? texto(userAnidado?.email);
+  const planId = idDe(p.plan_id, p.plan);
+
+  // Orden de preferencia del importe, y el motivo de cada exclusión:
+  //   · `settlement_amount` — lo que se le cobró de verdad. El mejor.
+  //   · `total` — mismo número en la versión medida (12.18 en los dos).
+  //   · `presentment_total` — lo que vio el comprador en su moneda.
+  //   · `subtotal` — sin impuestos, último recurso.
+  // NO se usa `amount_after_fees` (es neto de la comisión de Whop: mostraría de
+  // menos lo que pagó la persona) ni `usd_total` (convertido, no es lo cobrado).
+  const monto =
+    montoDe(p.settlement_amount) ??
+    montoDe(p.total) ??
+    montoDe(p.presentment_total) ??
+    montoDe(p.subtotal);
+
+  const moneda =
+    texto(p.currency) ??
+    texto((p.total as { currency?: unknown } | null)?.currency) ??
+    texto((p.settlement_currency as { code?: unknown } | null)?.code as string);
+
+  return {
+    id: typeof p.id === 'string' ? p.id : '',
+    status: texto(p.status),
+    // `substatus` es el campo que decide si entró la plata. Si no viene, se deja
+    // el string vacío: `mapearEstado` lo trata como desconocido y devuelve
+    // 'procesando', que es el default seguro (nunca 'fallido' por no saber).
+    substatus: typeof p.substatus === 'string' ? p.substatus : '',
+    decline_code: texto(p.decline_code),
+    failure_message: texto(p.failure_message),
+    currency: moneda ?? 'usd',
+    settlement_amount: monto as number,
+    total: montoDe(p.total),
+    metadata: (p.metadata as Record<string, unknown> | null) ?? null,
+    checkout_configuration_id: texto(p.checkout_configuration_id),
+    member: memberId ? { id: memberId } : null,
+    user: userId ? { id: userId, email, name: texto(userAnidado?.name) } : null,
+    payment_method: paymentMethodId
+      ? {
+          id: paymentMethodId,
+          payment_method_type:
+            texto((p.payment_method as { payment_method_type?: unknown } | null)?.payment_method_type) ??
+            texto(p.payment_method_type),
+        }
+      : null,
+    plan: planId ? { id: planId } : null,
+    paid_at: texto(p.paid_at),
+    retryable: p.retryable === true,
+    next_payment_attempt: texto(p.next_payment_attempt) ?? texto(p.next_payment_attempt_at),
+    refunded_at: texto(p.refunded_at),
+    dispute_alerted_at: texto(p.dispute_alerted_at),
+    recovery_url: texto(p.recovery_url),
+  };
+}
 
 export type CheckoutConfigWhop = {
   id: string;
@@ -264,9 +401,18 @@ export async function crearCheckoutConfiguration(params: {
   });
 }
 
-/** Trae un pago por id. Es la fuente de verdad del estado, junto con el webhook. */
+/**
+ * Trae un pago por id. Es la fuente de verdad del estado, junto con el webhook.
+ *
+ * Pasa por `normalizarPago` para que el resto del código vea una sola forma, sin
+ * importar a qué versión esté pinneada la API. Verificado el 2026-09-10: con
+ * `2026-08-21-1` este endpoint devuelve la forma anidada (`member: {id}`) y
+ * `settlement_amount`, mientras que la doc del webhook muestra la plana
+ * (`member_id`) sin `settlement_amount`.
+ */
 export async function obtenerPago(pagoId: string): Promise<PagoWhop> {
-  return whopFetch<PagoWhop>(`/payments/${encodeURIComponent(pagoId)}`);
+  const crudo = await whopFetch<unknown>(`/payments/${encodeURIComponent(pagoId)}`);
+  return normalizarPago(crudo);
 }
 
 /**
@@ -287,7 +433,7 @@ export async function crearPagoOffSession(params: {
   metadata?: Record<string, unknown>;
   idempotencyKey: string;
 }): Promise<PagoWhop> {
-  return whopFetch<PagoWhop>(
+  const crudo = await whopFetch<unknown>(
     '/payments',
     {
       method: 'POST',
@@ -301,6 +447,7 @@ export async function crearPagoOffSession(params: {
     },
     { idempotencyKey: params.idempotencyKey },
   );
+  return normalizarPago(crudo);
 }
 
 /** Un plan por id. Se usa en el panel para mostrar el precio real y el nombre soft. */

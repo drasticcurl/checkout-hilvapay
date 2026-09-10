@@ -13,6 +13,16 @@ export type Destinatario = {
   nombre: string | null;
   chat_id: string;
   activo: boolean;
+  /**
+   * Si además de las ventas recibe lo técnico (webhook caído, cola atascada,
+   * cobros trabados, reembolsos, disputas).
+   *
+   * Arranca en false: la primera cosa que le llega a alguien que se suma no puede
+   * ser "la cola de salidas tiene 3 filas quemadas". El chat de
+   * `TELEGRAM_CHAT_ID_ADMIN` recibe las dos audiencias siempre y no aparece en
+   * esta tabla.
+   */
+  recibe_tecnicas: boolean;
   ultimo_ok_at: Date | null;
   ultimo_error: string | null;
   created_at: Date;
@@ -27,7 +37,7 @@ export type AlertaRegistrada = {
   ultimo_detalle: string | null;
 };
 
-const COLS = `id, nombre, chat_id, activo, ultimo_ok_at, ultimo_error, created_at`;
+const COLS = `id, nombre, chat_id, activo, recibe_tecnicas, ultimo_ok_at, ultimo_error, created_at`;
 
 export async function listarDestinatarios(): Promise<Destinatario[]> {
   return q<Destinatario>(`select ${COLS} from destinatarios_alerta order by created_at asc`);
@@ -72,6 +82,18 @@ export async function crearDestinatario(datos: EntradaDestinatario): Promise<Des
 
 export async function setActivoDestinatario(id: string, activo: boolean): Promise<void> {
   await q('update destinatarios_alerta set activo = $1 where id = $2', [activo, id]);
+}
+
+/**
+ * Prende o apaga las alertas técnicas de una persona.
+ *
+ * Separado de `setActivoDestinatario` y no un solo update con dos campos: son dos
+ * decisiones distintas ("¿recibe algo?" y "¿recibe también lo técnico?") y un
+ * endpoint que acepte los dos a la vez invita a que un PATCH parcial apague sin
+ * querer el que no se mandó.
+ */
+export async function setTecnicasDestinatario(id: string, recibe: boolean): Promise<void> {
+  await q('update destinatarios_alerta set recibe_tecnicas = $1 where id = $2', [recibe, id]);
 }
 
 export async function eliminarDestinatario(id: string): Promise<void> {

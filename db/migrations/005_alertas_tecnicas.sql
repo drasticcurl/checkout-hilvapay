@@ -1,0 +1,33 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 005 — Alertas técnicas solo para el admin
+--
+-- La 004 mandaba TODO a todos los destinatarios. Está mal para el uso real: los
+-- avisos de venta son para el equipo (motivan, y son la razón por la que alguien
+-- deja el bot sin silenciar), pero "el webhook de Whop no llega" y "la cola no se
+-- drena" no le sirven a nadie que no pueda entrar a la VPS. Peor: mezclarlos hace
+-- que el equipo aprenda a ignorar los mensajes del bot, y entonces tampoco lee el
+-- de la venta.
+--
+-- Desde acá hay dos audiencias:
+--
+--   equipo → ventas. Va a TELEGRAM_CHAT_ID_ADMIN + todos los destinatarios activos.
+--   admin  → todo lo técnico (webhook mudo, cola atascada, cobros trabados,
+--            eventos con error, reembolsos, disputas). Va a
+--            TELEGRAM_CHAT_ID_ADMIN + solo los destinatarios con
+--            `recibe_tecnicas`.
+--
+-- ADITIVA e idempotente: una columna nueva con default.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+alter table destinatarios_alerta
+  -- `false` por default, al contrario de `activo` (que nace en true).
+  --
+  -- Los dos defaults apuntan al mismo lado: que sumar a alguien al bot sea
+  -- inofensivo. Nace recibiendo (si no, se registra y no le llega nada y parece
+  -- roto) pero NO recibiendo lo técnico (si no, la primera cosa que le llega a un
+  -- vendedor es "la cola de salidas tiene 3 filas quemadas").
+  --
+  -- El chat de TELEGRAM_CHAT_ID_ADMIN recibe las dos audiencias siempre y no
+  -- depende de esta columna: no tiene fila en esta tabla, a propósito, para que un
+  -- DELETE desde el panel no pueda dejar al sistema sin nadie que vea lo técnico.
+  add column if not exists recibe_tecnicas boolean not null default false;
