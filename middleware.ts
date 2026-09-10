@@ -71,6 +71,42 @@ function esLocal(host: string): boolean {
   return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.local');
 }
 
+/**
+ * Un redirect al MISMO dominio por el que entró el visitante.
+ *
+ * **No se usa `req.nextUrl.clone()` y esto no es preferencia de estilo.** Detrás
+ * de Caddy la app corre en el build standalone escuchando en `127.0.0.1:3020`, y
+ * `req.nextUrl` lo arma Next con esa dirección y no con el Host que pidió el
+ * browser. Con `clone()` el redirect sale a `https://localhost:3020/admin`, que
+ * en la máquina del visitante no existe: el login queda inusable y el error no
+ * menciona nada de esto.
+ *
+ * Medido en producción el 2026-09-10, antes del arreglo:
+ *   GET https://hilvapay.hilvanapp.com/  →  307  Location: https://localhost:3020/admin
+ *
+ * Es el mismo problema que documenta `dashboard-admin/middleware.ts` en
+ * `urlDeLogin`, y el orden de las fuentes es el mismo por la misma razón: el
+ * header lo puede escribir cualquiera que llegue sin pasar por el proxy, así que
+ * primero va el valor canónico de la config.
+ */
+function redirigirA(req: NextRequest, pathname: string): NextResponse {
+  const canonico = process.env.PANEL_HOST;
+  const reenviado = req.headers.get('x-forwarded-host') ?? req.headers.get('host');
+  const host = (canonico || reenviado || '').split(',')[0].trim();
+
+  if (!host) {
+    // Sin ningún host del que agarrarse, un redirect relativo es lo único
+    // seguro: el browser lo resuelve contra el dominio actual.
+    return NextResponse.redirect(new URL(pathname, req.nextUrl.origin));
+  }
+
+  const proto =
+    req.headers.get('x-forwarded-proto') ??
+    (host.startsWith('localhost') || host.startsWith('127.0.0.1') ? 'http' : 'https');
+
+  return NextResponse.redirect(`${proto}://${host}${pathname}`);
+}
+
 export async function middleware(req: NextRequest): Promise<NextResponse> {
   const { pathname } = req.nextUrl;
   const host = hostDe(req);
@@ -93,10 +129,7 @@ export async function middleware(req: NextRequest): Promise<NextResponse> {
     // donde el host es una IP y `esLocal()` saltea todo este bloque antes de
     // llegar acá. Verificado después de deployar.
     if (hostPanel && host === hostPanel && pathname === '/') {
-      const admin = req.nextUrl.clone();
-      admin.pathname = '/admin';
-      admin.search = '';
-      return NextResponse.redirect(admin);
+      return redirigirA(req, '/admin');
     }
 
     // Si no están configurados, no se bloquea nada: un deploy al que le falta una
@@ -132,10 +165,9 @@ export async function middleware(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
-  const login = req.nextUrl.clone();
-  login.pathname = '/admin/login';
-  login.search = '';
-  return NextResponse.redirect(login);
+  // Mismo motivo que el redirect de la raíz: con `req.nextUrl.clone()` esto
+  // mandaba a https://localhost:3020/admin/login y nadie podía loguearse.
+  return redirigirA(req, '/admin/login');
 }
 
 export const config = {
