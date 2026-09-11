@@ -78,18 +78,29 @@ Sin bot no se pierde ninguna venta: el vigilante detecta igual y lo escribe en
 `/var/log/hilvapay/vigilar.log`. Pero es la diferencia entre enterarse de una disputa en 15 minutos y
 enterarse cuando llega el contracargo.
 
-1. @BotFather → `/newbot` → el token va en `TELEGRAM_BOT_TOKEN`.
-2. Elegí dos secretos cualesquiera: `TELEGRAM_WEBHOOK_SECRET` y `TELEGRAM_CODIGO_REGISTRO`.
-3. Hablale al bot, mandale `/id` y poné ese número en `TELEGRAM_CHAT_ID_ADMIN`.
-4. Registrá el webhook, una sola vez:
-
 ```bash
-curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
-  -d "url=https://pay.hilvanapp.com/api/telegram/webhook" \
-  -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
+./scripts/configurar-telegram.sh                # escribe .env.local
+./scripts/configurar-telegram.sh --produccion   # escribe en la VPS y recarga PM2
+./scripts/configurar-telegram.sh --verificar    # no toca nada, solo diagnostica
 ```
 
-5. Probalo con **Mandar una prueba** en `/admin/alertas`.
+El script verifica el token contra `getMe`, genera los dos secretos, **lee tu `chat_id` de
+`getUpdates` solo** (no hace falta mandar `/id`), registra el webhook y lo confirma con
+`getWebhookInfo`, y escribe las cinco variables con `chmod 600` — en producción con backup previo.
+
+Lo único que no puede hacer es **crear** el bot: eso es una conversación con @BotFather dentro de
+Telegram y no tiene API. El script te dice qué escribirle:
+
+```
+/newbot  →  nombre: Hilvapay Avisos  →  username: algo que termine en "bot"
+```
+
+Después, **Mandar una prueba** en `/admin/alertas`. Esa pantalla también muestra la salud del bot
+(token válido, webhook registrado, updates pendientes) leída en vivo de la API de Telegram.
+
+> El paso del `chat_id` va ANTES de registrar el webhook y no es un capricho del orden: con el webhook
+> activo, Telegram entrega los mensajes ahí y `getUpdates` viene vacío para siempre. Si ya lo tenías
+> registrado, el script te pide el número a mano.
 
 Para sumar a alguien más: que le mande `/alta <código>` al bot. Comandos: `/alta`, `/baja`, `/id`,
 `/estado`.
