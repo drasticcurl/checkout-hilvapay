@@ -384,6 +384,39 @@ Nada de esto es nuevo, pero se volvió a medir para no arrastrar un dato viejo:
   está verificado end-to-end: firma válida con id nuevo da 200 y escribe la fila, el mismo id repetido
   da 200 `OK (duplicado)` sin escribir de nuevo, firma inválida da 400, y un `webhook-timestamp` de 10
   minutos atrás da 400 por la ventana anti-replay. Lo único que falta es el click en el dashboard.
+
+### El arreglo del 400, medido con tráfico real
+
+No hizo falta simularlo: la noche del cambio hubo dos compras reales del front y las dos
+dispararon el upsell, una antes del deploy y una después.
+
+| Hora | Release | Qué pasó |
+|---|---|---|
+| 01:27:38 | la vieja | `400 de Whop → fallido`. Venta perdida, sin salida para el comprador |
+| 01:54:56 | — | deploy de `b288111` |
+| 01:56:29 | la nueva | el cobro queda en **`requiere_tarjeta`** con el `failure_message` de Whop guardado |
+
+El comprador de las 01:56 termina en el checkout del upsell, donde el 3DS sí se puede completar,
+en vez de quedarse mirando un botón que no hizo nada.
+
+**Un cobro que quedó `fallido` ANTES del arreglo no se recupera reintentando.** El log de las
+01:30:24 lo muestra: `cobro 804adfad... ya existía (status=fallido), no se llama a Whop`. Es la
+guarda de `esFinal()` que impide el doble cobro, y no se toca — el riesgo de cobrarle dos veces a
+alguien supera el de perder un cobro de prueba. Si alguna vez hay que rescatar uno, el camino es
+borrar la fila de `cobros` a mano (el índice único `(orden_id, pagina_id)` es lo que bloquea) y
+solo si `whop_payment_id` está en NULL, que es la prueba de que Whop nunca creó el pago.
+
+### Ineficiencia conocida y no arreglada
+
+`/api/upsell/cobrar` crea un `checkout_configuration` para la recuperación y lo devuelve en
+`sessionIdRecuperacion`, pero el loader redirige a `/pagos/<slug>?ot=…&r=1` sin pasarlo, y
+`CheckoutContainer` crea otro al montar. O sea **dos sesiones de Whop por recuperación**; la
+primera queda huérfana.
+
+No se arregló a propósito. Son ~300 ms en el peor momento del funnel, no un fallo, y el camino de
+recuperación es justo el que cambió esta noche (se le agregó el botón de wallet). Meter dos cambios
+a la vez en el camino que ahora sostiene las ventas es cómo se rompe algo sin que nadie lo note.
+Queda para una sesión que pueda probarlo con un comprador de verdad.
 - **Telegram:** 0 de las 5 variables `TELEGRAM_*` están en `/srv/hilvapay/shared/.env.production`.
   Falta crear el bot con @BotFather. Los tres crons corren igual; el vigilante detecta y no tiene
   canal.
