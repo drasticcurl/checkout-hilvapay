@@ -89,9 +89,49 @@ describe('cripto', () => {
     it('un dato manipulado falla por el tag de GCM', async () => {
       const sobre = await cifrar('secreto');
       const partes = sobre.split('.');
-      // Se le cambia un caracter a los datos cifrados.
-      partes[2] = partes[2].slice(0, -1) + (partes[2].endsWith('A') ? 'B' : 'A');
+
+      // Se invierte un BIT de un byte del medio del ciphertext, decodificando y
+      // volviendo a codificar.
+      //
+      // La versión anterior de este test cambiaba el ÚLTIMO CARÁCTER del base64
+      // (`A` por `B`) y era FLAKY: abortó dos deploys antes de que se lo cazara
+      // corriendo la suite en loop (falló en la corrida 8 de 12).
+      //
+      // El motivo es base64, no azar. El ciphertext de 'secreto' son 23 bytes =
+      // 184 bits, que en base64url ocupan 31 caracteres = 186 bits: los últimos
+      // DOS BITS son padding y el decodificador los descarta. Cuando el cambio de
+      // `A` (000000) a `B` (000001) caía justo en esos bits, los bytes
+      // decodificados quedaban idénticos, GCM validaba bien y el test fallaba
+      // reportando "promise resolved instead of rejecting".
+      //
+      // Operar sobre los bytes hace la manipulación real siempre. El byte 0 se
+      // evita por las dudas de que alguna implementación lo trate distinto, y el
+      // XOR con 0xff garantiza que el byte cambie sea cual sea su valor — sumar 1
+      // tendría el mismo problema de "a veces no cambia nada" si hubiera overflow
+      // silencioso.
+      const bytes = Buffer.from(partes[2], 'base64url');
+      expect(bytes.length).toBeGreaterThan(1); // si esto falla, el formato cambió
+      const i = Math.floor(bytes.length / 2);
+      bytes[i] = bytes[i] ^ 0xff;
+      partes[2] = bytes.toString('base64url');
+
       await expect(descifrar(partes.join('.'))).rejects.toBeInstanceOf(CifradoInvalido);
+    });
+
+    it('la manipulación de un dato se detecta SIEMPRE, en cualquier posición', async () => {
+      // El test de arriba toca un byte fijo. Este recorre todos: es la propiedad
+      // que de verdad importa de AES-GCM —cualquier alteración invalida el tag— y
+      // es la que el test flaky no estaba probando.
+      const sobre = await cifrar('secreto');
+      const partes = sobre.split('.');
+      const original = Buffer.from(partes[2], 'base64url');
+
+      for (let i = 0; i < original.length; i++) {
+        const bytes = Buffer.from(original);
+        bytes[i] = bytes[i] ^ 0xff;
+        const manipulado = [partes[0], partes[1], bytes.toString('base64url')].join('.');
+        await expect(descifrar(manipulado)).rejects.toBeInstanceOf(CifradoInvalido);
+      }
     });
 
     it('una versión desconocida falla con un mensaje que la nombra', async () => {
