@@ -1,6 +1,44 @@
 import { describe, expect, it } from 'vitest';
-import { emparejar, type CobroParaEmparejar } from './reconciliacion';
+import { emparejar, esPagoDeOtraCuenta, type CobroParaEmparejar } from './reconciliacion';
+import { WhopError } from './whop';
 import type { PagoListado } from './whop';
+
+describe('esPagoDeOtraCuenta', () => {
+  // El caso medido el 2026-09-11: tras rotar de biz_LHktpJ17c83CFt a
+  // biz_Me8Lbiv174brtM, cuatro cobros de la cuenta vieja devolvían 403 cada 10
+  // minutos, para siempre, comiéndose el presupuesto del barrido.
+  it('un 403 de Whop es un pago de otra cuenta: se abandona', () => {
+    expect(esPagoDeOtraCuenta(new WhopError(403, 'You are not authorized'))).toBe(true);
+  });
+
+  it('un 404 también: el pago no existe para esta credencial', () => {
+    expect(esPagoDeOtraCuenta(new WhopError(404, 'not found'))).toBe(true);
+  });
+
+  // Ésta es la mitad importante del test. Abandonar por un error transitorio sería
+  // peor que el bug original: dejaría de vigilar reembolsos de cobros vivos por
+  // una caída de un minuto de Whop.
+  it('un 429 NO se abandona: es transitorio y el cobro vuelve a la cola', () => {
+    expect(esPagoDeOtraCuenta(new WhopError(429, 'Try again in 12 seconds.'))).toBe(false);
+  });
+
+  it('un 500 NO se abandona', () => {
+    expect(esPagoDeOtraCuenta(new WhopError(500, 'internal'))).toBe(false);
+  });
+
+  it('un 401 NO se abandona: es la key mal configurada, no el pago', () => {
+    // Si la credencial entera está mal, TODOS los cobros darían 401 y abandonarlos
+    // vaciaría la vigilancia de reembolsos del sistema completo.
+    expect(esPagoDeOtraCuenta(new WhopError(401, 'Authentication failed'))).toBe(false);
+  });
+
+  it('un error que no es de Whop NO se abandona', () => {
+    expect(esPagoDeOtraCuenta(new Error('ECONNRESET'))).toBe(false);
+    expect(esPagoDeOtraCuenta('algo')).toBe(false);
+    expect(esPagoDeOtraCuenta(null)).toBe(false);
+    expect(esPagoDeOtraCuenta(undefined)).toBe(false);
+  });
+});
 
 /**
  * `emparejar` es la función más peligrosa del módulo de reconciliación: decide

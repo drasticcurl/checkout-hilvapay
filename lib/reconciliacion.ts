@@ -76,6 +76,14 @@ export type ResultadoReconciliacion = {
   reembolsos: number;
   disputas: number;
   errores: number;
+  /**
+   * Cobros que Whop no reconoce (403/404) y que se dejaron de revisar.
+   *
+   * Se cuenta aparte de `errores` porque no es un error a investigar: es una
+   * decisión tomada. Un número > 0 después de rotar la cuenta de Whop es
+   * esperado; un número que crece con la cuenta estable no lo es.
+   */
+  abandonados: number;
 };
 
 function vacio(): ResultadoReconciliacion {
@@ -88,6 +96,7 @@ function vacio(): ResultadoReconciliacion {
     reembolsos: 0,
     disputas: 0,
     errores: 0,
+    abandonados: 0,
   };
 }
 
@@ -224,9 +233,48 @@ async function anotarReembolsoYDisputa(
   return { reembolso, disputa };
 }
 
+/**
+ * true si el error dice que este pago no es de la cuenta actual, y por lo tanto no
+ * tiene sentido volver a preguntar nunca.
+ *
+ * `403` es el caso medido: al rotar la cuenta de Whop, los pagos de la anterior
+ * devuelven `You are not authorized` para siempre. `404` es el mismo problema
+ * visto desde el otro lado — el pago no existe para esta credencial.
+ *
+ * Cualquier otro status queda afuera a propósito, y la distinción es la razón de
+ * ser de esta función: un `429` o un `5xx` son transitorios y el cobro **tiene**
+ * que volver a la cola. Confundirlos sería peor que el bug que esto arregla,
+ * porque abandonaría cobros vivos por una caída de un minuto de Whop.
+ */
+export function esPagoDeOtraCuenta(err: unknown): boolean {
+  return err instanceof WhopError && (err.status === 403 || err.status === 404);
+}
+
 /** Marca que este cobro se miró. Es lo que hace avanzar el round-robin. */
 async function marcarRevisado(cobroId: string): Promise<void> {
   await q('update cobros set revisado_at = now() where id = $1', [cobroId]);
+}
+
+/**
+ * Deja de revisar un cobro que Whop no reconoce.
+ *
+ * NO toca `status`: el cobro sigue `pagado` y sigue contando como venta. Lo único
+ * que se abandona es preguntarle a Whop por su reembolso, porque la credencial
+ * actual no puede leer ese pago y no va a poder nunca (ver migración 008).
+ *
+ * `coalesce` en la fecha para que el primer abandono sea el que quede: si por una
+ * carrera se llamara dos veces, la fecha no se corre y el motivo original se
+ * conserva.
+ */
+async function abandonarRevision(cobroId: string, motivo: string): Promise<void> {
+  await q(
+    `update cobros
+        set revision_abandonada_at     = coalesce(revision_abandonada_at, now()),
+            revision_abandonada_motivo = coalesce(revision_abandonada_motivo, $2),
+            revisado_at                = now()
+      where id = $1`,
+    [cobroId, motivo.slice(0, 300)],
+  );
 }
 
 /**
@@ -400,6 +448,7 @@ async function barrerPagados(limite: number, r: ResultadoReconciliacion): Promis
       where c.status = 'pagado'
         and c.reembolsado_at is null
         and c.whop_payment_id is not null
+        and c.revision_abandonada_at is null
         and c.created_at > now() - ($1 || ' days')::interval
       order by c.revisado_at nulls first, c.created_at desc
       limit $2`,
@@ -422,6 +471,27 @@ async function barrerPagados(limite: number, r: ResultadoReconciliacion): Promis
     } catch (err) {
       r.errores++;
       const motivo = err instanceof WhopError ? `${err.status} ${err.message}` : String(err);
+
+      // ── Abandonar en vez de reintentar para siempre ────────────────────────
+      // Un 403 o un 404 en `GET /payments/{id}` no es transitorio: significa que
+      // la credencial actual no puede leer ese pago, y eso pasa cuando el pago es
+      // de una cuenta de Whop anterior. Sin este corte el cobro vuelve cada 10
+      // minutos, le come lugar en el presupuesto a los cobros que sí importan, y
+      // llena el log. Medido con cuatro cobros girando así tras rotar la cuenta
+      // (ver migración 008).
+      //
+      // El cobro sigue `pagado` y sigue siendo una venta: lo único que se abandona
+      // es la revisión.
+      if (esPagoDeOtraCuenta(err)) {
+        r.abandonados++;
+        await abandonarRevision(cobro.id, motivo);
+        console.warn(
+          `[reconciliar] cobro ${cobro.id}: Whop no lo reconoce (${motivo}). ` +
+            `Se abandona la revisión — probablemente es de una cuenta anterior.`,
+        );
+        continue; // sin marcarRevisado: ya no vuelve a la cola
+      }
+
       console.warn(`[reconciliar] cobro ${cobro.id}: no se pudo revisar el reembolso (${motivo})`);
     }
     await marcarRevisado(cobro.id);
