@@ -434,18 +434,52 @@ export type ProductoWhop = {
  * devuelto en la orden, porque el objeto Payment trae
  * `checkout_configuration_id` como campo propio y es el vínculo más directo.
  *
- * `three_ds_level: 'frictionless'` pide a Whop que evite el desafío 3DS cuando
- * la red lo permite. Importa más de lo que parece: cada 3DS en la compra del
- * front es una tarjeta que puede terminar sin guardarse, y sin tarjeta guardada
- * no hay upsell one-click. No es una garantía — si el banco lo exige, el
- * desafío aparece igual.
+ * ── `three_ds_level`, y por qué el default cambió ────────────────────────────
+ * Whop acepta tres valores (documentados en el endpoint de checkout
+ * configurations): `frictionless`, `mandate_challenge` y `null`.
+ *
+ * Este archivo mandaba **`frictionless`** en la compra del front, con este
+ * razonamiento escrito al lado: "cada 3DS en la compra del front es una tarjeta
+ * que puede terminar sin guardarse, y sin tarjeta guardada no hay upsell
+ * one-click".
+ *
+ * **Ese razonamiento estaba invertido, y es la causa de que el one-click nunca
+ * haya podido cobrar.** `frictionless` le pide a Whop EVITAR el desafío 3DS, y es
+ * justamente ese desafío el que establece el mandato que autoriza los cobros
+ * posteriores sin el titular presente (lo que las redes llaman MIT). Sin
+ * mandato, `POST /payments` off-session se rechaza — y se rechaza con el 400
+ * genérico "We could not process this payment request right now", sin
+ * `decline_code` y sin mencionar nada de esto, que es lo que hizo perder horas
+ * buscando el problema en la tarjeta, en los permisos y en la company.
+ *
+ * `mandate_challenge` es lo contrario: hacé el desafío ACÁ, una vez, en la compra
+ * del front donde el comprador está presente y mirando la pantalla, y con eso
+ * queda habilitado el cobro de todos los upsells que sigan.
+ *
+ * El trade-off es real y vale la pena: un desafío 3DS en el front puede costar
+ * algo de conversión, pero es la diferencia entre tener upsells one-click y no
+ * tenerlos. Y el desafío es UNO: los upsells siguientes no lo repiten.
+ *
+ * El parámetro queda explícito para que cada llamador diga qué quiere, en vez de
+ * heredar un default que ya se demostró que se puede elegir mal en silencio.
  */
 export async function crearCheckoutConfiguration(params: {
   planId: string;
   metadata?: Record<string, unknown>;
   redirectUrl?: string;
-  frictionless?: boolean;
+  /**
+   * `mandate_challenge` para la compra del FRONT: crea el mandato de los cobros
+   * off-session que vienen después. `frictionless` solo donde no vaya a haber
+   * ningún cobro posterior contra esa tarjeta.
+   */
+  threeDsLevel?: 'mandate_challenge' | 'frictionless' | null;
 }): Promise<CheckoutConfigWhop> {
+  // El default es `mandate_challenge` a propósito: el caso normal de este
+  // servicio es "cobrar el front y después los upsells", y ese caso necesita el
+  // mandato. Un default de `frictionless` es lo que había y dejó el módulo
+  // entero sin poder cobrar.
+  const nivel = params.threeDsLevel === undefined ? 'mandate_challenge' : params.threeDsLevel;
+
   return whopFetch<CheckoutConfigWhop>('/checkout_configurations', {
     method: 'POST',
     body: JSON.stringify({
@@ -454,7 +488,7 @@ export async function crearCheckoutConfiguration(params: {
       mode: 'payment',
       ...(params.metadata ? { metadata: params.metadata } : {}),
       ...(params.redirectUrl ? { redirect_url: params.redirectUrl } : {}),
-      ...(params.frictionless === false ? {} : { three_ds_level: 'frictionless' }),
+      ...(nivel === null ? {} : { three_ds_level: nivel }),
     }),
   });
 }

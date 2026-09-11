@@ -149,7 +149,11 @@ export async function POST(req: Request): Promise<Response> {
       cfg = await crearCheckoutConfiguration({
         planId: fila.whop_plan_id as string,
         metadata: { orden_id: orden.id },
-        frictionless: true,
+        // Recuperación: el comprador está acá porque el cobro off-session falló,
+        // y va a autenticarse igual. `mandate_challenge` aprovecha ese desafío
+        // para dejar el mandato establecido, así el paso SIGUIENTE del funnel sí
+        // puede cobrarse en un click. Sin esto, cada upsell repetiría el desvío.
+        threeDsLevel: 'mandate_challenge',
       });
     } catch (err) {
       const motivo = err instanceof WhopError ? `${err.status} ${err.message}` : String(err);
@@ -209,7 +213,15 @@ export async function POST(req: Request): Promise<Response> {
     cfg = await crearCheckoutConfiguration({
       planId: fila.whop_plan_id as string,
       metadata: { orden_id: orden.id },
-      frictionless: true,
+      // LA COMPRA DEL FRONT ES DONDE SE CREA EL MANDATO. `mandate_challenge`
+      // hace el desafío 3DS acá, una vez, con el comprador presente — y eso es
+      // lo que autoriza los cobros one-click de todos los upsells que sigan.
+      //
+      // Antes iba `frictionless`, que le pide a Whop EVITAR el desafío. Se
+      // ahorraba una pantalla y se perdía el módulo entero de upsells: sin
+      // mandato, `POST /payments` off-session devuelve un 400 genérico que no
+      // menciona nada de esto (ver `crearCheckoutConfiguration`).
+      threeDsLevel: 'mandate_challenge',
     });
   } catch (err) {
     const motivo = err instanceof WhopError ? `${err.status} ${err.message}` : String(err);
