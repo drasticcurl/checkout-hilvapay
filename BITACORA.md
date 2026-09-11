@@ -460,6 +460,14 @@ y `getUpdates` viene vacío para siempre.
 
 1. **La respuesta de soporte de Whop sobre el 400 del cobro off-session.** Es lo que bloquea el
    lanzamiento del upsell one-click, no un bug de este código.
+
+   > Todo el diagnóstico está en
+   > [`tasks/checkout-whop/DIAGNOSTICO-ONE-CLICK.md`](tasks/checkout-whop/DIAGNOSTICO-ONE-CLICK.md):
+   > las **siete hipótesis descartadas** con su medición, el análisis del script de KashPay
+   > (que tiene la misma limitación con Whop y por eso lleva Stripe de respaldo), los ids
+   > concretos para reproducirlo, y los cuatro caminos que quedan. Está escrito para que
+   > alguien sin contexto del repo lo pueda retomar.
+
 2. Registrar el webhook desde el dashboard (sección 3.4 de ESTADO) y crear el bot de Telegram (3.7,
    ahora con el script que hace todo salvo hablar con @BotFather).
 3. Registrar el dominio para Apple Pay en el dashboard de Whop (3.11).
