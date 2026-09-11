@@ -166,6 +166,122 @@ const SCRIPT = `
       return null; // se agotaron los intentos sin resolverse
     }
 
+    /**
+     * Esconde el botón verde una vez que Whop Pay tomó el control.
+     *
+     * Los dos juntos son el "dos botones parten la atención" que el requisito de
+     * producto rechaza — y además el verde ya no sirve: su cobro es el que acaba de
+     * fallar, tocarlo otra vez repite el mismo 400.
+     */
+    function ocultar(el) {
+      try { if (el) el.style.display = 'none'; } catch (e) {}
+    }
+
+    /**
+     * Abre el diálogo de Whop Pay sobre la página del funnel, con el email ya
+     * cargado, cuando el cobro silencioso no pudo.
+     *
+     * ── Por qué esto y no el redirect ─────────────────────────────────────────
+     * Antes, un cobro que devolvía \`requiere_tarjeta\` mandaba al comprador a
+     * \`/pagos/<slug>?ot=...&r=1\`: otra página, otro dominio, y la oferta del funnel
+     * desaparecía de la pantalla. Eso es exactamente la "pantalla intermedia" que
+     * el requisito de producto rechaza. Acá el comprador se queda donde está.
+     *
+     * ── Por qué SOLO whop-pay, y no los tres métodos ──────────────────────────
+     * Apple Pay y Google Pay abren una hoja del sistema operativo, y el browser
+     * solo la deja abrir **desde el gesto del usuario**. Acá el gesto ya se
+     * consumió tocando el botón verde y esperando la respuesta del server, así que
+     * una hoja de wallet abierta por código queda bloqueada. Whop Pay es un
+     * diálogo en la propia página —DOM, no sistema operativo— y ese sí se puede
+     * abrir después.
+     *
+     * Pedir \`methods="whop-pay"\` es estricto a propósito: la doc aclara que un
+     * botón restringido NUNCA cae a otro método, así que no hay riesgo de que
+     * intente abrir una hoja bloqueada.
+     *
+     * ── Degrada en vez de romperse ────────────────────────────────────────────
+     * Que un diálogo se pueda abrir con un click sintético NO está documentado: si
+     * Whop mira \`event.isTrusted\`, lo ignora. Por eso el botón se monta VISIBLE y
+     * el click programático es un intento encima. Si funciona, el comprador no hace
+     * nada más. Si no, el botón está ahí con el mensaje al lado y toca una vez más
+     * — un toque extra, en la misma página, en vez de un redirect.
+     */
+    async function abrirWhopPay(slug, contenedorRef) {
+      var sesion = await pedirSesion(slug);
+      if (!sesion || !sesion.sessionId) {
+        console.log('[hilvana] whop-pay(' + slug + '): sin sesión', sesion);
+        return false;
+      }
+
+      await cargarScriptWhop();
+
+      // El contenedor va donde estaba el botón verde, para que la oferta no se
+      // mueva de lugar debajo del dedo del comprador.
+      var host = document.createElement('div');
+      host.setAttribute('data-hilvana-whop-pay', slug);
+      host.style.marginTop = '10px';
+
+      var ancla = contenedorRef && contenedorRef.parentNode ? contenedorRef : null;
+      if (ancla) ancla.parentNode.insertBefore(host, ancla.nextSibling);
+      else document.body.appendChild(host);
+
+      var boton = document.createElement('whop-express-checkout-button');
+      boton.setAttribute('checkout-configuration-id', sesion.sessionId);
+      boton.setAttribute('return-url', window.location.href);
+      boton.setAttribute('methods', 'whop-pay');
+      boton.setAttribute('theme', 'light');
+      boton.setAttribute('skip-redirect', 'true');
+      boton.setAttribute('setup-future-usage', 'off_session');
+      if (sesion.email) boton.setAttribute('prefill-email', sesion.email);
+
+      boton.addEventListener('complete', async function (ev) {
+        var recibo = ev && ev.detail ? (ev.detail.receiptOrSetupIntentId || ev.detail.receiptId) : null;
+        if (!recibo) {
+          console.log('[hilvana] whop-pay(' + slug + '): completó sin recibo', ev && ev.detail);
+          return;
+        }
+        try {
+          var res = await confirmar(slug, recibo);
+          if (res && res.siguienteUrl) { irA(res.siguienteUrl); return; }
+          console.log('[hilvana] whop-pay(' + slug + '): confirmado sin siguiente URL', res);
+        } catch (e) {
+          console.log('[hilvana] whop-pay(' + slug + '): error confirmando', e);
+        }
+      });
+
+      boton.addEventListener('payment-error', function (ev) {
+        var d = ev && ev.detail ? ev.detail : {};
+        console.log('[hilvana] whop-pay(' + slug + '): error de pago', d);
+        mostrarErrorDePago(host, d.message, d.code);
+      });
+
+      host.appendChild(boton);
+
+      // El intento de abrirlo solo. \`ready\` avisa cuando el custom element se
+      // midió y está usable; sin esperarlo, el click cae en un elemento que
+      // todavía no tiene nada adentro.
+      var abierto = false;
+      boton.addEventListener('overlay-open', function () { abierto = true; });
+      boton.addEventListener('ready', function () {
+        try { boton.click(); } catch (e) {}
+      });
+
+      // Si a los 1200 ms el diálogo no se abrió, se le dice al comprador que
+      // toque. Es el camino degradado, y tiene que ser explícito: un botón nuevo
+      // que aparece sin explicación después de un "Procesando..." se lee como que
+      // algo falló.
+      setTimeout(function () {
+        if (abierto) return;
+        mostrarErrorDePago(
+          host,
+          'Tu banco necesita que confirmes esta compra. Tocá el botón de acá abajo, es un solo paso.',
+          null,
+        );
+      }, 1200);
+
+      return true;
+    }
+
     async function aceptarUpsell(slug) {
       if (cobroEnCurso) return; // primera defensa contra el doble click
       if (typeof slug !== 'string' || !slug) return;
@@ -188,6 +304,9 @@ const SCRIPT = `
         var resultado = await cobrar(slug);
 
         if (resultado && resultado.error === 'sin_metodo_guardado') {
+          // Nunca se guardó una tarjeta en la compra del front, así que no hay
+          // nada contra qué cobrar en silencio. Whop Pay en la misma página.
+          if (await abrirWhopPay(slug, boton)) { ocultar(boton); return; }
           irA(base() + '/pagos/' + encodeURIComponent(slug) + '?ot=' + encodeURIComponent(t) + '&r=1');
           return;
         }
@@ -209,6 +328,14 @@ const SCRIPT = `
         }
 
         if (final.pedirTarjeta && final.estado === 'requiere_tarjeta') {
+          // El cobro silencioso no pudo: el banco quiere que el titular confirme.
+          // Whop Pay lo resuelve acá mismo, con el email ya cargado, en vez de
+          // mandarlo a otra página y hacerle perder de vista la oferta.
+          //
+          // El redirect queda como último recurso, para el caso en que ni la
+          // sesión ni el script de Whop se puedan levantar: es peor perder la
+          // venta que mostrar otra pantalla.
+          if (await abrirWhopPay(slug, boton)) { ocultar(boton); return; }
           irA(base() + '/pagos/' + encodeURIComponent(slug) + '?ot=' + encodeURIComponent(t) + '&r=1');
           return;
         }
