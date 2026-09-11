@@ -256,6 +256,158 @@ const SCRIPT = `
       } catch (e) {}
     }
 
+    // ── El botón de wallet: UN TOQUE, sin pasar por el cobro off-session ────
+    //
+    // Por qué existe: el cobro contra la tarjeta guardada
+    // (\`POST /api/upsell/cobrar\`) está bloqueado del lado de Whop — devuelve un
+    // 400 genérico sin decline_code, con seis hipótesis descartadas y medidas.
+    // Este camino no lo usa: le pide una sesión al server y monta el botón de
+    // Apple Pay / Google Pay de Whop. El comprador toca UNA vez, aprueba con
+    // Face ID, y el wallet resuelve el pago y la autenticación del banco solo.
+    //
+    // Del lado del funnel es un div y nada más:
+    //
+    //     <div data-hilvana-wallet="mi-slug"></div>
+    //
+    // Todo lo demás —la sesión, el script de Whop, el custom element, la
+    // confirmación y el redirect— lo hace este script. El funnel no necesita
+    // saber que Whop existe, que es la misma razón por la que \`loader.js\`
+    // existe en primer lugar.
+
+    var scriptWhopPromesa = null;
+
+    function cargarScriptWhop() {
+      // El script de Whop registra el custom element <whop-express-checkout-button>.
+      // Se carga UNA vez y bajo demanda: no se le agrega ~50 kB a cada página del
+      // funnel para un botón que puede no estar en esa página.
+      if (scriptWhopPromesa) return scriptWhopPromesa;
+      scriptWhopPromesa = new Promise(function (resolve, reject) {
+        try {
+          var src = 'https://js.whop.com/static/checkout/loader.js';
+          var existente = document.querySelector('script[src="' + src + '"]');
+          if (existente) {
+            if (window.customElements && window.customElements.get('whop-express-checkout-button')) {
+              resolve();
+              return;
+            }
+            existente.addEventListener('load', function () { resolve(); });
+            existente.addEventListener('error', function () { reject(new Error('no cargó')); });
+            return;
+          }
+          var s = document.createElement('script');
+          s.src = src;
+          s.async = true;
+          s.onload = function () { resolve(); };
+          s.onerror = function () { reject(new Error('no cargó')); };
+          (document.head || document.body || document.documentElement).appendChild(s);
+        } catch (e) {
+          reject(e);
+        }
+      });
+      return scriptWhopPromesa;
+    }
+
+    async function pedirSesion(slug) {
+      var resp = await fetch(base() + '/api/upsell/sesion', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: token(), slug: slug }),
+      });
+      return await resp.json().catch(function () { return {}; });
+    }
+
+    async function confirmar(slug, receiptId) {
+      var resp = await fetch(base() + '/api/upsell/confirmar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: token(), slug: slug, receiptId: receiptId }),
+      });
+      return await resp.json().catch(function () { return {}; });
+    }
+
+    async function montarWallet(contenedor) {
+      var slug = contenedor.getAttribute('data-hilvana-wallet');
+      if (!slug) return;
+      // Marca para no montar dos veces el mismo contenedor: este arranque corre
+      // en \`load\` y también lo puede llamar el funnel a mano.
+      if (contenedor.getAttribute('data-hilvana-montado') === '1') return;
+      contenedor.setAttribute('data-hilvana-montado', '1');
+
+      if (!token()) {
+        // Sin token no hay orden: alguien entró a la página del upsell por un
+        // link directo. No es un error que haya que mostrar.
+        console.log('[hilvana] wallet(' + slug + '): sin token, no se monta');
+        return;
+      }
+
+      try {
+        var sesion = await pedirSesion(slug);
+        if (!sesion || !sesion.sessionId) {
+          console.log('[hilvana] wallet(' + slug + '): sin sesión', sesion);
+          return;
+        }
+
+        await cargarScriptWhop();
+
+        var boton = document.createElement('whop-express-checkout-button');
+        boton.setAttribute('checkout-configuration-id', sesion.sessionId);
+        // Volver a ESTA página si el método necesita redirigir. Whop lo exige
+        // aunque con el listener de 'complete' no se use en el camino feliz.
+        boton.setAttribute('return-url', window.location.href);
+        boton.setAttribute('theme', 'light');
+        boton.setAttribute('skip-redirect', 'true');
+        // Se pide guardar el método: si el cobro off-session se destraba algún
+        // día, el paso siguiente ya queda habilitado sin tocar nada.
+        boton.setAttribute('setup-future-usage', 'off_session');
+
+        boton.addEventListener('express-method-resolved', function (ev) {
+          var r = ev && ev.detail ? ev.detail.rendered : null;
+          console.log('[hilvana] wallet(' + slug + '): método = ' + r);
+          // Sin ningún wallet disponible se esconde el contenedor entero, para no
+          // dejar un hueco. El botón normal (data-hilvana-upsell) sigue ahí.
+          if (r === 'none') {
+            try { contenedor.style.display = 'none'; } catch (e) {}
+          }
+        });
+
+        boton.addEventListener('complete', async function (ev) {
+          var recibo = ev && ev.detail ? (ev.detail.receiptOrSetupIntentId || ev.detail.receiptId) : null;
+          if (!recibo) {
+            console.log('[hilvana] wallet(' + slug + '): completó sin recibo', ev && ev.detail);
+            return;
+          }
+          try {
+            var res = await confirmar(slug, recibo);
+            if (res && res.siguienteUrl) {
+              irA(res.siguienteUrl);
+              return;
+            }
+            // Pagó pero no hay a dónde ir: no se lo manda a ninguna parte y el
+            // cron de reconciliación cierra el cobro. Peor sería un redirect a
+            // una URL inventada.
+            console.log('[hilvana] wallet(' + slug + '): confirmado sin siguiente URL', res);
+          } catch (e) {
+            console.log('[hilvana] wallet(' + slug + '): error confirmando', e);
+          }
+        });
+
+        boton.addEventListener('payment-error', function (ev) {
+          console.log('[hilvana] wallet(' + slug + '): error de pago', ev && ev.detail);
+        });
+
+        contenedor.appendChild(boton);
+      } catch (e) {
+        console.log('[hilvana] wallet(' + slug + '): no se pudo montar', e);
+      }
+    }
+
+    function montarTodosLosWallets() {
+      try {
+        var nodos = document.querySelectorAll('[data-hilvana-wallet]');
+        for (var i = 0; i < nodos.length; i++) montarWallet(nodos[i]);
+      } catch (e) {}
+    }
+
     // Al cargar: si vino ?ot= en la URL, se guarda. Si no, se usa el que ya
     // hubiera en sessionStorage. token() ya hace las dos cosas por su cuenta,
     // pero se llama una vez ahora para que quede guardado ni bien carga el
@@ -263,10 +415,30 @@ const SCRIPT = `
     token();
     enganchar();
 
+    // Los wallets se montan cuando el DOM está listo: el bloque de oferta de un
+    // funnel con VSL suele aparecer más tarde, así que además se reintenta en
+    // 'load' y se deja la función expuesta para que el funnel la llame cuando
+    // revele su bloque. montarWallet marca el contenedor, así que llamarla de
+    // más no duplica botones.
+    try {
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', montarTodosLosWallets);
+      } else {
+        montarTodosLosWallets();
+      }
+      window.addEventListener('load', montarTodosLosWallets);
+    } catch (e) {}
+
     window.hilvana = {
       aceptarUpsell: aceptarUpsell,
       rechazarUpsell: rechazarUpsell,
       token: token,
+      /**
+       * Para el funnel que revela su bloque de oferta después de cargar (un VSL,
+       * por ejemplo): llamala cuando el div con data-hilvana-wallet entre al
+       * DOM. Es idempotente.
+       */
+      montarWallets: montarTodosLosWallets,
     };
   } catch (e) {
     // Ni esto puede tirar hacia afuera. Si algo de lo de arriba falló de una
