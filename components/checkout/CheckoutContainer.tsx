@@ -56,6 +56,29 @@ export function CheckoutContainer({
   const enVueloRef = useRef(false);
   const controlesRef = useRef<ControlesTarjeta | null>(null);
 
+  /**
+   * Qué forma de pago se está mostrando en la pantalla de recuperación.
+   *
+   * Existe para garantizar que haya UNA SOLA surface de Whop montada por vez.
+   * Con el wallet y el embed juntos sobre la misma `checkout_configuration`, el
+   * pago con Apple Pay no llegaba a crearse (medido el 2026-09-11). En el
+   * checkout normal no se usa: ahí el formulario es el único camino.
+   */
+  const [metodo, setMetodo] = useState<'wallet' | 'tarjeta'>('wallet');
+
+  /**
+   * A dónde vuelve el comprador si el wallet usa un método que redirige.
+   *
+   * Se calcula una sola vez en el cliente y NO con `window.location.href` inline:
+   * en el primer render `window` no existe, así que el componente montaba con
+   * `returnUrl=''` — y la doc de Whop exige una URL absoluta. Con `useState` +
+   * inicializador perezoso el valor se fija en el primer render del cliente y no
+   * cambia después, que es lo que el embed espera.
+   */
+  const [urlDeRetorno] = useState(() =>
+    typeof window === 'undefined' ? '' : window.location.href,
+  );
+
   const crearSesion = useCallback(async () => {
     if (creandoSesion || sesion) return;
     setCreandoSesion(true);
@@ -186,34 +209,69 @@ export function CheckoutContainer({
 
         {esRecuperacion ? (
           <p className="rounded-lg border border-precio/25 bg-precio/5 px-3.5 py-3 text-[13px] leading-relaxed text-texto">
-            Tu banco necesita que confirmes esta compra. Ingresá los datos de tu tarjeta una vez más para completarla.
+            Tu banco necesita que confirmes esta compra. Terminala acá abajo, es un solo paso.
           </p>
         ) : (
           <CamposComprador nombre={nombre} email={email} onNombreChange={setNombre} onEmailChange={setEmail} />
         )}
 
-        {/* El wallet SOLO en recuperación, y arriba de la caja de tarjeta.
-            Acá el comprador ya dijo que sí y el cobro falló: pedirle que tipee
-            de nuevo los 16 dígitos es la fricción máxima en el peor momento. Con
-            Apple Pay o Google Pay aprueba con Face ID y el wallet resuelve el
-            desafío del banco solo — que es exactamente lo que el cobro
-            off-session no puede hacer.
+        {/* ── UNA SOLA SURFACE DE WHOP POR VEZ ──────────────────────────────
+            En recuperación se ofrece primero el wallet y el formulario de
+            tarjeta SOLO si el comprador lo pide. Nunca los dos juntos, y esa es
+            la corrección de un bug medido:
 
-            No se pone en el checkout del front a propósito: ahí el embed ya
-            funciona, cobra y guarda la tarjeta, y agregar una segunda forma de
-            pagar arriba del formulario es una decisión de conversión que
-            merece medirse aparte, no colarse en un arreglo de recuperación. */}
-        {esRecuperacion && sesion ? (
-          <BotonExpress
-            sessionId={sesion.sessionId}
-            email={email}
-            environment={environment}
-            onCompletado={handleCompletado}
-            onError={setMensajeError}
-          />
+            La primera versión montaba `BotonExpress` y `CajaTarjeta` a la vez,
+            los dos sobre la MISMA `checkout_configuration`. Probado con Apple Pay
+            real el 2026-09-11: la hoja se abría, el comprador la aprobaba, volvía
+            a la página y NO se creaba ningún pago en Whop (verificado en
+            `GET /payments`: el último seguía siendo el del front). Dos embeds de
+            Whop peleándose la misma sesión.
+
+            El wallet acá tiene sentido porque el comprador ESTÁ PRESENTE y puede
+            autenticarse. Lo que el wallet no arregla es el cobro off-session del
+            paso siguiente: un token de Apple Pay es un DPAN atado al dispositivo,
+            sin fingerprint ni expiración (medido: `payt_6LXxXQSekTbrs` los trae en
+            null), y por diseño no se puede cobrar sin el titular. */}
+        {esRecuperacion && metodo === 'wallet' ? (
+          <div className="flex flex-col gap-3">
+            {sesion ? (
+              <BotonExpress
+                sessionId={sesion.sessionId}
+                returnUrl={urlDeRetorno}
+                email={email}
+                environment={environment}
+                onCompletado={handleCompletado}
+                onError={setMensajeError}
+                onEvento={(e) => {
+                  // Si el navegador no soporta ningún wallet, se pasa solo al
+                  // formulario: dejar la pantalla sin ninguna forma de pagar es
+                  // peor que mostrar el formulario sin preguntar.
+                  if (e.tipo === 'metodo' && e.rendered === 'none') setMetodo('tarjeta');
+                }}
+              />
+            ) : (
+              <div className="flex h-11 items-center justify-center">
+                <span
+                  className="h-5 w-5 animate-spin rounded-full border-2 border-borde border-t-precio"
+                  role="status"
+                  aria-label="Cargando las formas de pago"
+                />
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setMetodo('tarjeta')}
+              className="text-center text-[13px] text-texto-2 underline underline-offset-2 hover:text-texto"
+            >
+              Prefiero pagar con tarjeta
+            </button>
+          </div>
         ) : null}
 
-        {listoParaMostrarEmbed && sesion ? (
+        {/* El formulario. En recuperación solo aparece si el comprador eligió
+            tarjeta o si no había wallet disponible; en el checkout normal es
+            siempre el único camino. */}
+        {(!esRecuperacion || metodo === 'tarjeta') && listoParaMostrarEmbed && sesion ? (
           <CajaTarjeta
             ref={controlesRef}
             sessionId={sesion.sessionId}
@@ -224,7 +282,7 @@ export function CheckoutContainer({
             onCompletado={handleCompletado}
             onError={(msg) => setMensajeError(msg)}
           />
-        ) : (
+        ) : !esRecuperacion || metodo === 'tarjeta' ? (
           // El esqueleto que se ve mientras faltan datos: MISMA caja que va a
           // tener el embed —mismo borde de 2px, mismo padding, mismo radio— para
           // que al montarse no salte el layout.
@@ -237,7 +295,7 @@ export function CheckoutContainer({
               />
             </div>
           </div>
-        )}
+        ) : null}
 
         {mensajeError ? (
           <p
@@ -248,12 +306,23 @@ export function CheckoutContainer({
           </p>
         ) : null}
 
-        <BotonComprar
-          texto={config.textoBoton ?? 'COMPRAR AHORA'}
-          disabled={!botonHabilitado}
-          cargando={enviando || redirigiendo}
-          onClick={handleClickComprar}
-        />
+        {/* El botón grande solo cuando está montado el EMBED, porque es lo único
+            que dispara: `handleClickComprar` llama a `controlesRef.current.submit()`,
+            que es el submit del iframe de Whop.
+
+            Con el wallet visible el embed no está montado, así que este botón no
+            haría nada — un botón de "COMPRAR AHORA" que no responde en una pantalla
+            de pago es peor que no tenerlo, y es exactamente lo que puede haber
+            apretado quien probó Apple Pay el 2026-09-11 y reportó que "no pasaba
+            nada". El wallet trae su propio botón adentro. */}
+        {!esRecuperacion || metodo === 'tarjeta' ? (
+          <BotonComprar
+            texto={config.textoBoton ?? 'COMPRAR AHORA'}
+            disabled={!botonHabilitado}
+            cargando={enviando || redirigiendo}
+            onClick={handleClickComprar}
+          />
+        ) : null}
 
         {/* Va como texto y NO como links: no existen esas páginas todavía, y un
             link roto en un checkout es peor que no tenerlo. Los términos que sí

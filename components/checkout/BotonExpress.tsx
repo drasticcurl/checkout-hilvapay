@@ -18,10 +18,6 @@ import type { WhopCheckoutPaymentError } from '@whop/checkout/util';
  * chequeadas contra esta lista. Si mañana se agrega una prop mal escrita, `tsc`
  * la marca. Un `any` la dejaría pasar en silencio, que en un formulario de pago es
  * exactamente lo que no se quiere.
- *
- * `CajaTarjeta` tiene el mismo problema con `WhopCheckoutEmbed` y lo resuelve con
- * dos `as never` puntuales; acá el cast es del componente entero porque la
- * incompatibilidad está en su tipo de retorno, no en una prop.
  */
 const BotonWallet = WhopExpressCheckoutButton as unknown as (props: {
   checkoutConfigurationId: string;
@@ -37,54 +33,62 @@ const BotonWallet = WhopExpressCheckoutButton as unknown as (props: {
   onExpressMethodResolved?: (info: { rendered: string }) => void;
 }) => JSX.Element;
 
+/** Lo que el componente le reporta al contenedor sobre qué pasó. */
+export type EventoWallet =
+  | { tipo: 'metodo'; rendered: string }
+  | { tipo: 'error'; mensaje: string }
+  | { tipo: 'completado'; receiptId: string | null };
+
 /**
  * Apple Pay / Google Pay / Whop Pay en un toque, para la pantalla de
  * recuperación.
  *
  * ── Por qué existe ──────────────────────────────────────────────────────────
  * Cuando el cobro one-click falla, el comprador termina acá y tiene que volver a
- * tipear los 16 dígitos de la tarjeta que ya usó hace treinta segundos. Es la
- * fricción máxima en el peor momento: ya dijo que sí, y le pedimos trabajo.
+ * tipear los 16 dígitos de la tarjeta que ya usó hace treinta segundos. Con el
+ * wallet no tipea nada — aprueba con Face ID — y **el wallet resuelve la
+ * autenticación del banco por su cuenta**, que es justo lo que el cobro
+ * off-session no puede hacer.
  *
- * Con el wallet no tipea nada — aprueba con Face ID o con el PIN del teléfono — y
- * el wallet **resuelve la autenticación del banco por su cuenta**. Eso importa
- * especialmente acá: el motivo por el que el one-click falla en esta cuenta es
- * que Whop no puede completar un desafío 3DS sin nadie del otro lado (medido el
- * 2026-09-11: `POST /payments` off-session devuelve 400 `bad_request` sin
- * `decline_code`, con los cuatro ids válidos y el pago del front autenticado con
- * `three_ds_verified: true`). En el wallet ese desafío lo resuelve el dispositivo.
+ * ── UNA SOLA SURFACE DE WHOP POR VEZ ────────────────────────────────────────
+ * Este componente y `CajaTarjeta` NO se montan juntos, y esa es la corrección
+ * más importante de esta versión.
  *
- * No reemplaza al one-click ni pretende arreglarlo: es la mejor salida cuando ya
- * falló.
+ * La primera versión los mostraba a la vez, los dos sobre la MISMA
+ * `checkout_configuration`. Probado con Apple Pay real el 2026-09-11: la hoja se
+ * abría, el comprador la completaba, volvía a la página, y **no se creaba ningún
+ * pago en Whop** — verificado en `GET /payments`, donde el último pago seguía
+ * siendo el del front. Dos embeds de Whop peleándose la misma sesión.
  *
- * ── Qué se renderiza y qué NO ───────────────────────────────────────────────
- * Un solo botón, el que el navegador soporte, en este orden: Apple Pay en Safari,
- * Google Pay en Chrome/Android, Whop Pay (un diálogo) en el resto.
+ * Ahora el contenedor muestra el wallet primero y el formulario solo si el
+ * comprador lo pide. Nunca hay dos.
  *
- * Apple Pay además exige el dominio verificado en Whop; el archivo
- * `public/.well-known/apple-developer-merchantid-domain-association` ya se sirve
- * (200 en producción), pero falta registrarlo en el dashboard. **Google Pay no
- * necesita esa verificación**, así que este componente ya aporta hoy en Chrome y
- * Android, que es la mayoría del tráfico del funnel.
- *
- * Si el navegador no puede mostrar ninguno, `onExpressMethodResolved` avisa con
- * `rendered: 'none'` y este componente se esconde entero. Sin eso queda un hueco
- * con un separador "o con tarjeta" que no separa nada, y el comprador se pregunta
- * qué falló.
+ * ── El returnUrl ────────────────────────────────────────────────────────────
+ * Llega por prop desde el server, ya absoluto. La primera versión lo armaba con
+ * `typeof window !== 'undefined' ? window.location.href : ''`, así que en el
+ * primer render era **una cadena vacía** — y la doc de Whop exige una URL
+ * absoluta. El componente montaba con un valor inválido y solo se corregía en el
+ * render siguiente, si llegaba a corregirse.
  */
 export function BotonExpress({
   sessionId,
+  returnUrl,
   email,
   environment,
   onCompletado,
   onError,
+  onEvento,
 }: {
-  /** El `checkout_configuration` que ya creó el server, con su metadata. */
+  /** El `checkout_configuration` de este wallet. NO se comparte con CajaTarjeta. */
   sessionId: string;
+  /** URL absoluta a la que vuelve el comprador si el método redirige. Del server. */
+  returnUrl: string;
   email: string;
   environment: 'production' | 'sandbox';
   onCompletado: (receiptId: string) => void;
   onError: (mensaje: string) => void;
+  /** Telemetría para el contenedor: qué método se renderizó, qué falló. */
+  onEvento?: (e: EventoWallet) => void;
 }): JSX.Element | null {
   // Arranca en `true` y solo se apaga si Whop dice que no hay método: si
   // arrancara oculto, el botón aparecería de golpe un instante después y correría
@@ -94,51 +98,42 @@ export function BotonExpress({
   if (!puedeRenderizar) return null;
 
   return (
-    <div className="flex flex-col gap-3">
-      <BotonWallet
-        // `checkoutConfigurationId` y no `planId`: la sesión ya la creó el server
-        // con la metadata de la orden y el paso (`orden_id`, `pagina_id`), que es
-        // lo que después vincula el pago con el cobro. Con `planId` se crearía una
-        // sesión nueva sin esa metadata y el pago quedaría huérfano.
-        checkoutConfigurationId={sessionId}
-        // Requerido por el componente: un pago iniciado acá puede completarse
-        // dentro del overlay de Whop con un método que redirige (3DS, por
-        // ejemplo), y el comprador necesita a dónde volver. `onComplete` implica
-        // `skipRedirect: true`, así que en el camino feliz esta URL no se usa —
-        // pero tiene que existir para el que sí redirige.
-        returnUrl={typeof window !== 'undefined' ? window.location.href : ''}
-        // Se vuelve a pedir guardar la tarjeta. Hoy el cobro off-session está
-        // bloqueado del lado de Whop, pero el día que se desbloquee, el comprador
-        // que pasó por acá ya queda habilitado para el one-click del paso
-        // siguiente sin tener que hacer nada.
-        setupFutureUsage="off_session"
-        prefill={{ email }}
-        environment={environment}
-        locale="es"
-        // Claro forzado por el mismo motivo que `CajaTarjeta`: el default de Whop
-        // sigue el modo del sistema, y a quien tenga el celular en oscuro le
-        // saldría un botón negro en el medio de una página blanca.
-        theme="light"
-        themeOptions={{ accentColor: 'blue' }}
-        onComplete={(_planId: string, receiptId?: string) => {
-          if (receiptId) onCompletado(receiptId);
-        }}
-        onPaymentError={(error: WhopCheckoutPaymentError) =>
-          onError(`${error.message}${error.code ? ` (${error.code})` : ''}`)
-        }
-        onExpressMethodResolved={({ rendered }) => {
-          if (rendered === 'none') setPuedeRenderizar(false);
-        }}
-      />
-
-      {/* El separador vive DENTRO de este componente y no en el contenedor a
-          propósito: así desaparece junto con el botón cuando no hay wallet, en vez
-          de quedar anunciando una alternativa que no está. */}
-      <div className="flex items-center gap-3" aria-hidden="true">
-        <span className="h-px flex-1 bg-borde" />
-        <span className="text-[12px] text-texto-2">o con tarjeta</span>
-        <span className="h-px flex-1 bg-borde" />
-      </div>
-    </div>
+    <BotonWallet
+      // La sesión es propia de este componente (ver el bloque de arriba sobre por
+      // qué no se comparte con CajaTarjeta). Sigue llevando la metadata de la
+      // orden, que es lo que `/api/checkout/reclamar` usa para validar que el pago
+      // sea de esta orden y no de otra.
+      checkoutConfigurationId={sessionId}
+      returnUrl={returnUrl}
+      // Se vuelve a pedir guardar la tarjeta. Hoy el cobro off-session está
+      // bloqueado del lado de Whop, pero el día que se desbloquee, el comprador
+      // que pasó por acá ya queda habilitado para el one-click del paso siguiente.
+      setupFutureUsage="off_session"
+      prefill={{ email }}
+      environment={environment}
+      locale="es"
+      // Claro forzado por el mismo motivo que `CajaTarjeta`: el default de Whop
+      // sigue el modo del sistema, y a quien tenga el celular en oscuro le saldría
+      // un botón negro en el medio de una página blanca.
+      theme="light"
+      themeOptions={{ accentColor: 'blue' }}
+      onComplete={(_planId: string, receiptId?: string) => {
+        // Se reporta SIEMPRE, con o sin receiptId. Un `onComplete` sin receipt es
+        // exactamente el síntoma que hubo que diagnosticar a ciegas la primera
+        // vez, y sin este aviso no queda registro de que ocurrió.
+        onEvento?.({ tipo: 'completado', receiptId: receiptId ?? null });
+        if (receiptId) onCompletado(receiptId);
+        else onError('El pago se completó pero Whop no devolvió el comprobante. Escribinos para confirmarlo.');
+      }}
+      onPaymentError={(error: WhopCheckoutPaymentError) => {
+        const msg = `${error.message}${error.code ? ` (${error.code})` : ''}`;
+        onEvento?.({ tipo: 'error', mensaje: msg });
+        onError(msg);
+      }}
+      onExpressMethodResolved={({ rendered }) => {
+        onEvento?.({ tipo: 'metodo', rendered });
+        if (rendered === 'none') setPuedeRenderizar(false);
+      }}
+    />
   );
 }
