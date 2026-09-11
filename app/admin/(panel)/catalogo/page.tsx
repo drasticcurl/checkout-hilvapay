@@ -15,6 +15,7 @@ import {
   EstadoVacio,
   clasesBoton,
 } from '../../../../components/panel/ui';
+import { BotonActualizar } from './BotonActualizar';
 import { FilaPlan } from './FilaPlan';
 
 export const dynamic = 'force-dynamic';
@@ -22,12 +23,17 @@ export const runtime = 'nodejs';
 
 export default async function CatalogoPage(): Promise<JSX.Element> {
   const { productos, huerfanos, error } = await catalogoWhop();
+  // Se toma DESPUÉS del fetch, no antes: lo que el botón informa es cuándo
+  // llegaron estos datos, no cuándo se empezó a pedirlos. Con una respuesta lenta
+  // de Whop la diferencia se nota.
+  const leidoAt = new Date().toISOString();
 
   return (
     <div className="space-y-6">
       <EncabezadoPantalla
         titulo="Catálogo de Whop"
         descripcion="Lo que hay en tu cuenta de Whop, leído por API. Vinculá un plan para crear el link de pago: el precio sale del plan y el nombre lo escribís vos."
+        acciones={<BotonActualizar leidoAt={leidoAt} />}
       />
 
       {error ? (
