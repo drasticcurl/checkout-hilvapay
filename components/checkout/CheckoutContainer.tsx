@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ConfigPagina } from '@/lib/tipos';
 import { BadgeSeguro } from './BadgeSeguro';
 import { BotonComprar } from './BotonComprar';
+import { BotonExpress } from './BotonExpress';
 import { CajaTarjeta, type ControlesTarjeta } from './CajaTarjeta';
 import { CamposComprador } from './CamposComprador';
 import { CardProducto } from './CardProducto';
@@ -184,6 +185,27 @@ export function CheckoutContainer({
         ) : (
           <CamposComprador nombre={nombre} email={email} onNombreChange={setNombre} onEmailChange={setEmail} />
         )}
+
+        {/* El wallet SOLO en recuperación, y arriba de la caja de tarjeta.
+            Acá el comprador ya dijo que sí y el cobro falló: pedirle que tipee
+            de nuevo los 16 dígitos es la fricción máxima en el peor momento. Con
+            Apple Pay o Google Pay aprueba con Face ID y el wallet resuelve el
+            desafío del banco solo — que es exactamente lo que el cobro
+            off-session no puede hacer.
+
+            No se pone en el checkout del front a propósito: ahí el embed ya
+            funciona, cobra y guarda la tarjeta, y agregar una segunda forma de
+            pagar arriba del formulario es una decisión de conversión que
+            merece medirse aparte, no colarse en un arreglo de recuperación. */}
+        {esRecuperacion && sesion ? (
+          <BotonExpress
+            sessionId={sesion.sessionId}
+            email={email}
+            environment={environment}
+            onCompletado={handleCompletado}
+            onError={setMensajeError}
+          />
+        ) : null}
 
         {listoParaMostrarEmbed && sesion ? (
           <CajaTarjeta
