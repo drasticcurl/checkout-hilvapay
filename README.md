@@ -99,19 +99,40 @@ Para sumar a alguien más: que le mande `/alta <código>` al bot. Comandos: `/al
 
 Los avisos de venta se apagan con `TELEGRAM_AVISAR_VENTAS=0`; las fallas no se pueden apagar.
 
+## Hay dos fuentes de credenciales, y la de la base gana
+
+`resolverCredenciales` (`lib/whop-credenciales.ts`) mira primero la tabla `config`: si hay una API key
+guardada ahí (se pone desde `/admin/conexion`), se usan esos cuatro valores **completos** — nunca una
+mezcla de base y entorno para el secreto. Solo si la fila está vacía, o la key no se puede descifrar
+(falta `CONFIG_ENCRYPTION_KEY`), cae al `.env` de siempre y lo loguea.
+
+**Por eso diagnosticar leyendo `.env.production` puede dar un diagnóstico falso.** Pasó en la sesión
+del 2026-09-11: la key del entorno es de una cuenta y la que cobra de verdad es otra. Para saber cuál
+corre, hay que leer `config`, no el archivo:
+
+```bash
+psql "$DATABASE_URL" -c "select whop_company_id, whop_verificado_at from config;"
+```
+
+Si esa fila tiene `whop_company_id`, esa es la cuenta que cobra — no la del `.env`. El `.env` sigue
+siendo el piso de respaldo: si se vacía la fila o se pierde la clave de cifrado, el servicio sigue
+cobrando con él (ver `resolverCredenciales`).
+
 ## Estado verificado de la conexión con Whop
 
-Medido el **2026-09-10** contra la API real:
+Medido el **2026-09-11** contra la base de producción (tabla `config`, que es la que gana):
 
 | | |
 |---|---|
 | Entorno | **producción** (`https://api.whop.com/api/v1`). En sandbox la key da 401 |
-| `Api-Version-Date` | `2026-08-21-1` |
-| Company | `biz_Me8Lbiv174brtM` — "Sinvanapp" |
-| Plan del front | `plan_hgNXAvG16M9ix` — 9.90 usd, `one_time`, producto `prod_pRD7ZnRinvzU1` |
+| Company activa | `biz_LHktpJ17c83CFt` — "Atlas & Co.", `verified: false` |
+| Plan del front | `plan_LHZoqVmWkYbuO` — 1.00 usd |
+| Plan del upsell | `plan_7ToMQEt8zlUmK` — 2.00 usd |
 | Emails de Whop | **apagados** (`send_customer_emails: false`) |
 
-Los planes de los tres upsells **todavía no existen**.
+La key del `.env.production` sigue siendo de `biz_Me8Lbiv174brtM` ("Sinvanapp", medido el
+2026-09-10) y ya no es la que cobra: es el respaldo si se vacía `config`. No la borres pensando que es
+un resabio.
 
 ### Cuatro endpoints de v1 que NO sirven para verificar
 

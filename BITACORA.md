@@ -260,3 +260,139 @@ de referencia.
 2. **`b8e4c7c` no está deployado.** Trae la migración 006, que es aditiva (`add column if not exists`).
 3. Sigue faltando el bot de Telegram y `RESEND_API_KEY`: el health los reporta como opcionales y el
    vigilante detecta igual, pero no puede avisar.
+
+---
+
+## 2026-09-11 — El cobro off-session da 400, la cuenta de Whop se rotó, y un bug que desconectaba todo funnel
+
+### De dónde salió
+
+El objetivo de la sesión era confirmar que el upsell one-click funciona de punta a punta contra una
+cuenta real. No se llegó: el cobro off-session choca con un 400 de Whop sin explicación, y buena parte
+de la sesión fue descartar causas hasta quedarse solo con una hipótesis y un ticket abierto con
+soporte. En el camino se encontraron dos cosas más: la cuenta que cobra ya no es la del `.env`, y el
+editor de funnels tenía un bug que dejaba cualquier funnel nuevo desconectado después del pago.
+
+### El cobro off-session: descartado todo lo descartable, queda un 400 sin explicar
+
+`POST /payments` con `account_id` + `plan_id` + `member_id` + `payment_method_id` —el cobro contra una
+tarjeta ya guardada, sin que el comprador esté presente— devuelve siempre:
+
+```json
+{"error":{"type":"bad_request","message":"We could not process this payment request right now. Please try again later."}}
+```
+
+400, sin `decline_code`, sin crear ningún objeto de pago. Cero información para actuar. El orden en que
+se descartaron las hipótesis, cada una con su prueba:
+
+1. **¿Un id inválido?** No: con los cuatro ids inventados, Whop da 404 específicos por tipo ("This
+   Plan/Member/PaymentToken was not found"). Con los cuatro reales, ninguno de esos 404. El endpoint
+   sí los está resolviendo.
+2. **¿El plan del upsell en particular?** No: el mismo cobro con el plan del **front** —que ya cobró
+   bien con esa misma tarjeta, on-session, minutos antes— también da 400.
+3. **¿Falta un scope?** No: se probaron 12 scopes contra `GET /permissions`. 11 dan `granted: true`.
+   El único en `false` es `developer:manage_webhook` (el mismo de siempre, ver ESTADO §3.4), y cuando
+   se lo prueba a propósito da **403 nombrando el scope que falta** — no un 400 genérico. El error de
+   los cobros no tiene esa forma.
+4. **¿El payload está mal armado?** No: coincide campo por campo con la doc. Y el endpoint sí lee el
+   body — omitir `payment_method_id` da el mensaje puntual "payment_method_id is required unless
+   confirmation_token is provided", no el 400 genérico.
+5. **¿Es el plan?** No: se probó un plan inline con `renewal`, y ese **llegó a crearse** (existe en
+   Whop) y recién ahí el cobro sobre él falló con el mismo 400. El bloqueo está después de resolver el
+   plan, en el cobro mismo.
+
+Seis variantes en total, las cinco de arriba más `capture: true` y mandar `email`. Las seis, el mismo
+400.
+
+**Se abrió un ticket con soporte de Whop.** Confirmaron dos cosas por la negativa: ni el gating por
+company con `verified: false` ni un mandato MIT (Merchant-Initiated Transaction) están documentados
+en su doc pública, y que van a necesitar mirar los logs del lado de ellos para decir algo más
+concreto. Sigue sin respuesta.
+
+**Hipótesis principal, sin confirmar:** el pago del front (on-session) trae `three_ds_verified: true`
+y `risk_score: 70` en su respuesta. Si el emisor de la tarjeta exige 3DS en cada transacción —no solo
+la primera—, un cobro off-session no tiene forma de resolver ese desafío: no hay comprador presente
+para aprobarlo con el banco. Encaja con lo que ya estaba documentado en ESTADO §4.2.3 (un pago
+off-session que pidió 3DS no se puede continuar, `client_secret` es `null`).
+
+**Lo que sí sirvió, para la próxima vez que haya que diagnosticar un cobro:**
+
+- `GET /payment_methods?member_id=<mber_...>` **lista** los métodos guardados de un member y sirve
+  para confirmar que la tarjeta está ahí.
+- `GET /payment_methods/<payt_...>` en cambio da **404** aunque el método exista — es un falso
+  negativo, no hay que leerlo como "no se guardó".
+- Los 404 específicos por id inválido de `POST /payments` (punto 1) son la forma más rápida de
+  descartar "¿el id está mal?" antes de sospechar del cobro en sí.
+
+Esto va a ESTADO §3.0 como el bloqueo actual más importante: sin resolverlo, el upsell one-click no
+puede lanzarse aunque todo lo demás del módulo esté listo.
+
+### La cuenta de Whop cambió, y diagnosticar por el `.env` dio un diagnóstico falso
+
+Al empezar a probar el cobro, se leyó `.env.production` para confirmar contra qué cuenta se estaba
+probando: `biz_Me8Lbiv174brtM` ("Sinvanapp"). Los resultados no cerraban con lo que se veía en el
+dashboard de Whop, hasta confirmar que la credencial que cobra de verdad **no sale del `.env` desde que
+existe `/admin/conexion`** (agregado el 2026-09-10, tarde — ver esa entrada). `resolverCredenciales`
+mira la tabla `config` primero, y ahí hay una key guardada de otra cuenta:
+
+```bash
+psql "$DATABASE_URL" -c "select whop_company_id, whop_verificado_at from config;"
+#  biz_LHktpJ17c83CFt | 2026-09-11 00:21:12
+```
+
+`biz_LHktpJ17c83CFt` — "Atlas & Co.", `verified: false` en Whop. Los planes en uso son
+`plan_LHZoqVmWkYbuO` (front, 1.00 usd) y `plan_7ToMQEt8zlUmK` (upsell, 2.00 usd), los dos de Atlas. La
+key de Sinvanapp sigue en el `.env.production` — no es un resabio que haya que borrar, es el piso de
+respaldo que sigue si se vacía `config` o se pierde `CONFIG_ENCRYPTION_KEY`.
+
+**La lección, para no repetirla:** con dos fuentes de credenciales, leer una sola para diagnosticar
+puede dar una respuesta coherente y falsa. Hay que leer `config` primero, siempre. Va al README como
+sección nueva ("Hay dos fuentes de credenciales, y la de la base gana").
+
+### El editor de funnels dejaba todo funnel nuevo desconectado
+
+Armando un funnel de prueba de punta a punta para testear el cobro, el comprador quedaba en la
+pantalla del checkout después de pagar en vez de pasar al primer upsell. La causa: `SelectorDestino`
+—el control para elegir a dónde va cada rama— solo se ofrecía en los pasos de tipo upsell. El paso
+`front` no lo tenía, así que su `paginas.paso_aceptado_id` quedaba en `NULL` siempre, sin que el panel
+lo mostrara como un error.
+
+Arreglado en la misma sesión: el selector ahora es genérico para toda rama, incluida la del front.
+Queda anotado porque cualquier funnel armado antes de este arreglo tiene que revisarse a mano — el
+bug no deja rastro visible en el panel, solo en el comportamiento después de pagar.
+
+### Lo nuevo que se sumó de paso
+
+No era el objetivo de la sesión, pero se hizo mientras se armaba el funnel de prueba:
+
+- `/admin/tutorial`: 9 pasos con estado real (lee la base y Whop, no una checklist fija).
+- Botón de copiar el snippet en cada paso del funnel.
+- `/admin/alertas` ahora corre `getMe` + `getWebhookInfo` de Telegram y dice qué variable falta.
+- `lib/rate-limit.ts`: se auditó y `POST /api/upsell/cobrar` no tenía ningún límite (a diferencia de
+  `/api/checkout/sesion`, que tiene 20/min). Ahora tiene 10/min por IP, limitador propio.
+- El token de orden quedó acotado al funnel de origen: una orden de un funnel no puede usarse para
+  cobrar el upsell de otro.
+- Botón de wallet (Apple Pay/Google Pay) en la pantalla de recuperación — relevante para el bloqueo
+  de arriba, porque con el wallet el desafío 3DS lo resuelve el dispositivo, no un flujo off-session.
+
+### Estado de los pendientes de siempre, reverificado
+
+Nada de esto es nuevo, pero se volvió a medir para no arrastrar un dato viejo:
+
+- **Webhook:** sigue sin registrarse en el dashboard de Whop. `select count(*) from whop_eventos` da
+  **0**. Sigue sin poder crearse por API (`developer:manage_webhook` en `false`). El endpoint en sí
+  está verificado end-to-end: firma válida con id nuevo da 200 y escribe la fila, el mismo id repetido
+  da 200 `OK (duplicado)` sin escribir de nuevo, firma inválida da 400, y un `webhook-timestamp` de 10
+  minutos atrás da 400 por la ventana anti-replay. Lo único que falta es el click en el dashboard.
+- **Telegram:** 0 de las 5 variables `TELEGRAM_*` están en `/srv/hilvapay/shared/.env.production`.
+  Falta crear el bot con @BotFather. Los tres crons corren igual; el vigilante detecta y no tiene
+  canal.
+- **Apple Pay:** el archivo `.well-known` ya da 200 en producción. Falta registrar el dominio en el
+  dashboard de Whop. Google Pay no necesita este paso.
+
+### Qué queda pendiente y es de otro
+
+1. **La respuesta de soporte de Whop sobre el 400 del cobro off-session.** Es lo que bloquea el
+   lanzamiento del upsell one-click, no un bug de este código.
+2. Registrar el webhook desde el dashboard (sección 3.4 de ESTADO) y crear el bot de Telegram (3.7).
+3. Registrar el dominio para Apple Pay en el dashboard de Whop (3.11).

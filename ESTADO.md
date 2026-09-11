@@ -1,7 +1,7 @@
 # ESTADO — checkout propio sobre Whop (hilvapay)
 
-Última actualización: **2026-09-10** (reconciliación de cobros, alertas por Telegram, health check real
-y pantalla de números).
+Última actualización: **2026-09-11** (cuenta de Whop rotada por el panel, el cobro off-session
+bloqueado por Whop, tutorial guiado, alertas del bot y rate limit en el cobro).
 
 Este archivo es la foto del proyecto: qué es, qué está hecho, qué falta y qué hay que saber para no
 romperlo. Si algo de acá no coincide con la realidad, la realidad tiene razón: corregí el archivo.
@@ -52,16 +52,30 @@ y no expone ni la pantalla de login.
 
 ### Estado de la conexión con Whop, verificado contra la API real
 
+**La cuenta cambió el 2026-09-10 y ya no es la del `.env`.** Desde que existe `/admin/conexion`, la
+credencial que cobra sale de la tabla `config` (ver README, "Hay dos fuentes de credenciales"), y
+diagnosticar leyendo `.env.production` da un diagnóstico falso — pasó en la sesión del 2026-09-11.
+
 | | |
 |---|---|
 | Entorno | **producción** (en sandbox la key da 401) |
-| `Api-Version-Date` | `2026-08-21-1` |
-| Company | `biz_Me8Lbiv174brtM` — "Sinvanapp" |
-| Producto | `prod_pRD7ZnRinvzU1` — "app agua de arroz" |
-| Plan del front | `plan_hgNXAvG16M9ix` — 9.90 usd, `one_time` |
-| Plan del upsell | `plan_r0bQAmFITt6aU` — 37.00 usd, `one_time`, "Acceso Vip 30 Días" |
-| Planes huérfanos | `plan_sARwY0XsFUbAg`, `plan_5t3JLH0wp9o7c` — sin producto, **no usar** |
+| Fuente de la credencial | tabla `config`, override del panel. `.env.production` es solo el respaldo |
+| Company activa | `biz_LHktpJ17c83CFt` — "Atlas & Co.", `verified: false` |
+| Plan del front | `plan_LHZoqVmWkYbuO` — 1.00 usd |
+| Plan del upsell | `plan_7ToMQEt8zlUmK` — 2.00 usd |
 | Emails de Whop | **apagados** (`send_customer_emails: false`) |
+
+Verificado el 2026-09-11 contra la base de producción:
+
+```bash
+psql "$DATABASE_URL" -c "select whop_company_id, whop_verificado_at from config;"
+# biz_LHktpJ17c83CFt | 2026-09-11 00:21:12
+```
+
+La cuenta anterior (`biz_Me8Lbiv174brtM` — "Sinvanapp", con `plan_hgNXAvG16M9ix` de 9.90 usd) sigue
+viva en el `.env.production` como piso de respaldo, pero no es la que cobra desde que se guardó la key
+de Atlas en el panel. No hay que confundir "la key del entorno todavía existe" con "la key del entorno
+cobra": son cosas distintas desde la 006.
 
 ### Un pago que ya existe en la cuenta
 
@@ -184,14 +198,93 @@ a 1024px los ocho no entran. Abajo de eso se usa la fila con scroll horizontal q
 
 ---
 
+## 2.ter Cuenta rotada, tutorial guiado, rate limit en el cobro (2026-09-11)
+
+**La cuenta de Whop se rotó desde el panel.** `/admin/conexion` ahora tiene guardada la key de
+`biz_LHktpJ17c83CFt` ("Atlas & Co."), y esa es la que cobra — ver §2, "Estado de la conexión con
+Whop". No se tocó código para esto: es el mecanismo de `resolverCredenciales` haciendo lo que tiene
+que hacer.
+
+Nuevo en esta sesión:
+
+| Qué | Qué resuelve |
+|---|---|
+| `/admin/tutorial` | 9 pasos con estado **real** (lee la base y Whop, no una checklist estática) |
+| Botón de copiar snippet | en cada paso del funnel, para no ir a buscar el `<script>` al código |
+| `/admin/alertas` con salud del bot | corre `getMe` + `getWebhookInfo` de Telegram y dice **qué variable falta**, no solo "no configurado" |
+| `lib/rate-limit.ts` | ver más abajo |
+| Token de orden acotado al funnel de origen | una orden de un funnel no puede usarse para cobrar un upsell de otro |
+| Botón de wallet (Apple Pay/Google Pay) | en la pantalla de **recuperación** (`components/checkout/BotonExpress.tsx`). Con el wallet el desafío 3DS lo resuelve el dispositivo (Face ID / PIN), no el emisor contra un flujo off-session — relevante por el bloqueo de §3.0 |
+
+**`lib/rate-limit.ts`** nace de una auditoría que encontró que `POST /api/upsell/cobrar` —el
+endpoint que cobra— no tenía ningún límite, mientras que `/api/checkout/sesion` sí (20/min). Ahora
+tiene **10/min por IP**, en memoria, con su propio `Limitador` independiente del otro endpoint. No es
+defensa contra un atacante con muchas IPs (para eso está Cloudflare, delante) ni un rate limiter
+distribuido (el estado vive en el proceso y un `pm2 reload` lo reinicia): frena el bucle — doble
+submit, script mal cortado, `useEffect` sin deps —, que es la mayoría de lo que pasa de verdad. Lo que
+protege el cobro contra un doble cobro de verdad sigue siendo el índice único de `cobros`, no esto.
+
+### El editor de funnels tenía un bug que dejaba todo funnel desconectado — arreglado
+
+El paso `front` no tenía selector para su rama "si acepta": el comprador se quedaba en el checkout
+después de pagar en vez de seguir al primer upsell. Ya arreglado; el detalle y la advertencia para
+funnels viejos están en §5.
+
+---
+
 ## 3. Lo que falta
 
 Ordenado por lo que bloquea a lo que no.
+
+### 3.0 El cobro off-session está bloqueado por Whop. Es lo que bloquea todo lo demás.
+
+Medido el **2026-09-11**: `POST /payments` con `account_id` + `plan_id` + `member_id` +
+`payment_method_id` —el cobro one-click del upsell, contra una tarjeta ya guardada— devuelve
+**siempre**:
+
+```json
+{"error":{"type":"bad_request","message":"We could not process this payment request right now. Please try again later."}}
+```
+
+400, sin `decline_code`, y **sin crear ningún objeto de pago** en Whop. No es un caso puntual: se
+probaron seis variantes y las seis dan el mismo error.
+
+**Lo que se descartó, con evidencia:**
+
+| Sospecha | Por qué no es eso |
+|---|---|
+| Un id inválido | Con ids inventados el endpoint da 404 **específicos** ("This Plan/Member/PaymentToken was not found"); con los cuatro reales, ninguno |
+| El plan del upsell en particular | El mismo cobro con el plan del **front** —que ya cobró bien con esa misma tarjeta on-session— también da 400 |
+| Un scope faltante | Se probaron 12 scopes: 11 dan 200. El único que falta (`developer:manage_webhook`) da 403 **nombrando el scope**, no un 400 genérico |
+| El payload | Coincide campo por campo con la doc; omitir `payment_method_id` da el mensaje esperado ("...unless confirmation_token is provided"), así que el endpoint sí está leyendo el body |
+| El plan en sí | Un plan inline con `renewal` llegó a **crearse** y recién ahí falló con el mismo 400 — el bloqueo está en el cobro, no en el plan |
+
+Variantes probadas sin éxito: `plan_id` normal, plan del front, `capture: true`, con `email`,
+`company_id` en vez de `account_id`, plan inline.
+
+**Hipótesis principal:** el pago del front trae `three_ds_verified: true` y `risk_score: 70`. El
+emisor probablemente exige 3DS en cada transacción, y off-session no hay nadie que pueda responder el
+desafío — consistente con lo que ya dice §4.2.3: un pago off-session que pidió 3DS no se puede
+continuar, `client_secret` es `null`.
+
+El soporte de Whop confirmó que **ni el gating por company `verified: false` ni un mandato MIT están
+documentados**, y que hace falta que ellos miren sus logs para decir qué está pasando. Sigue abierto.
+
+**Dos endpoints que sí sirven, encontrados en el camino:**
+
+- `GET /payment_methods?member_id=<mber_...>` **lista** los métodos guardados de un member.
+  `GET /payment_methods/<payt_...>` en cambio da **404** — es un falso negativo, no significa que el
+  método no exista.
+- `POST /payments` con un id inválido devuelve el 404 específico de arriba, lo que lo hace útil para
+  descartar "¿el id está mal?" antes de sospechar del cobro en sí.
 
 ### 3.1 Nunca cobró nada. Falta la primera compra real.
 
 **Es lo único que puede confirmar que el módulo funciona.** No hay sandbox configurado, así que la
 única forma de verificar que Whop guarda la tarjeta es comprar con una tarjeta real y reembolsar.
+
+Y ojo: aunque el front cobre bien, **el upsell one-click sigue bloqueado por §3.0** hasta que Whop
+resuelva el 400.
 
 ```bash
 # después de comprar el front, esto tiene que devolver un payt_...
@@ -224,7 +317,22 @@ seguro mientras no se decida con qué funnel se reporta.
 
 **Hay que crearlo desde el dashboard, no por API.** La key tiene
 `developer:manage_webhook` en **false** (verificado el 2026-09-10 con
-`GET /permissions?resource_id=biz_...`), así que `POST /api/v1/webhooks` devuelve 403.
+`GET /permissions?resource_id=biz_...`, y de nuevo el 2026-09-11 sobre la cuenta de Atlas: sigue en
+`false`), así que `POST /api/v1/webhooks` devuelve 403.
+
+**Sigue sin registrarse.** Verificado el 2026-09-11: `select count(*) from whop_eventos` da **0**. El
+endpoint en sí está probado end-to-end y anda; lo que falta es exclusivamente que el dashboard de Whop
+lo apunte acá. Las tres respuestas, medidas contra producción:
+
+| Request | Respuesta | Por qué |
+|---|---|---|
+| firma válida, `webhook-id` nuevo | **200** `OK`, y una fila en `whop_eventos` | el camino normal |
+| firma válida, **mismo `webhook-id`** | **200** `OK (duplicado)`, y **ninguna** fila nueva | se deduplica por id. Tiene que ser 2xx: con un 4xx Whop reintentaría y a las 72 h deshabilitaría el webhook sin reenviar lo de ese período |
+| `webhook-timestamp` de 10 min atrás | **400** | la ventana anti-replay de 5 minutos de `lib/whop-webhook.ts` |
+
+Los dos últimos son casos distintos y conviene no confundirlos: el reenvío del mismo evento se
+absorbe sin procesarlo dos veces, y lo que se rechaza con 400 es un sobre viejo — el que usaría
+alguien que capturó un request y lo repite más tarde.
 
 Dashboard de Whop → **Developer → Webhooks → Create**:
 
@@ -292,7 +400,10 @@ Los productos y páginas que existen están en la base **local**. En producción
 
 ### 3.7 El bot de Telegram no está creado
 
-El código está y funciona; falta el token. Cuatro variables, todas documentadas en `.env.example`:
+El código está y funciona; falta el token. Verificado el 2026-09-11: **0 de las variables
+`TELEGRAM_*` están en `/srv/hilvapay/shared/.env.production`.** Los tres crons sí corren en la VPS —
+el vigilante detecta los problemas igual, solo que no tiene canal para avisarlos. Cuatro variables
+obligatorias, todas documentadas en `.env.example`:
 
 | Variable | Para qué | Sin ella |
 |---|---|---|
@@ -335,6 +446,13 @@ Postergado a propósito mientras sea un MVP de un solo usuario.
 ### 3.10 No hay backups de la base
 
 Ningún `pg_dump` en ningún cron. En `ordenes` están los emails de los compradores y los ids de Whop.
+
+### 3.11 Apple Pay: falta un click en el dashboard de Whop, no código
+
+El archivo `.well-known` ya se sirve. Verificado el 2026-09-11:
+`https://pay.hilvanapp.com/.well-known/apple-developer-merchantid-domain-association` da **200**.
+Falta registrar el dominio en el dashboard de Whop (Developer → Apple Pay o donde Whop lo pida) para
+que Apple lo verifique. Google Pay no tiene este paso: no lo necesita.
 
 ---
 
@@ -434,6 +552,7 @@ así. Todos con su test o su verificación.
 | **`plan_id` no existe en el listado de pagos de Whop.** La doc lo muestra plano; la API con `Api-Version-Date: 2026-08-21-1` lo devuelve anidado como `plan: {id}`. Un emparejamiento que leyera `plan_id` habría fallado siempre, en silencio y solo para el cobro del front | pidiéndole `GET /payments` a la API real y mirando las claves |
 | **Reembolsos y disputas se escribían y no se leían.** El webhook llenaba `reembolsado_at` y `disputa_at` correctamente, y ninguna pantalla del panel los seleccionaba: entraba un contracargo y no se veía en ningún lado | buscando dónde se mostraba `disputa_at` |
 | **El handler del webhook leía una sola forma del payload, y no es la única.** La forma del objeto Payment depende del `api_version_date`: con el pin de este proyecto (`2026-08-21-1`) viene anidada (`member: {id}`, `payment_method: {id}`, `user: {email}`, `settlement_amount`), y el ejemplo de `payment.succeeded` de la doc (pin `2026-09-09`) viene **plana** (`member_id`, `payment_method_id`, `customer_email`, `plan_id`) y **sin `settlement_amount`** — el importe solo está en `total: {amount}`. Con la forma plana el handler guardaba `whop_payment_method_id` NULL (**cero upsells one-click**), email NULL y `monto` NULL, y un monto NULL hace que `armarPayloadIngest` omita la venta: no llega al dashboard ni aparece en los números. Y la versión NO se puede elegir, porque el webhook se crea desde el dashboard | leyendo el ejemplo de payload de la doc y comparándolo campo por campo con lo que devuelve la API real |
+| **El editor de funnels dejaba todo funnel desconectado.** `SelectorDestino` solo se ofrecía en los pasos de upsell; el paso `front` no tenía forma de elegir su rama "si acepta", así que `paginas.paso_aceptado_id` quedaba en `NULL` siempre y el comprador se quedaba en el checkout después de pagar. Arreglado el 2026-09-11: el selector es ahora genérico para toda rama. Los funnels armados antes hay que revisarlos a mano | armando un funnel de punta a punta y viendo dónde quedaba el comprador después de pagar |
 
 ---
 
@@ -460,9 +579,14 @@ Están en `tasks/checkout-whop/00-PLAN-CHECKOUT-WHOP.md` §10, con su formato co
 
 ## 7. Números
 
+Remedido el 2026-09-11:
+
 ```
-248 tests en 14 archivos · tsc exit 0 · next build compila
-5 migraciones, idempotentes · 12 afirmaciones de esquema en verde
-49 rutas · 2 dominios sobre 1 proceso · 3 crons
+423 tests en 22 archivos · tsc exit 0 · next build compila
+6 migraciones, idempotentes
+53 rutas · 2 dominios sobre 1 proceso · 3 crons
 0 cobros reales · 0 webhooks de Whop recibidos · 0 alertas mandadas (falta el bot)
 ```
+
+El cobro sigue en cero no solo por falta de la primera compra (§3.1): el upsell one-click, aunque el
+front cobre, choca con el bloqueo de §3.0.

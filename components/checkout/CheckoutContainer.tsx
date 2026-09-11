@@ -143,7 +143,13 @@ export function CheckoutContainer({
         setEnviando(false);
       }
     },
-    [sesion],
+    // `esRecuperacion` y `slug` van en las deps aunque en la práctica no cambien
+    // durante la vida del componente: `slug` es una prop del server component y
+    // `esRecuperacion` se deriva de otra. Estaban omitidas y el efecto es nulo
+    // hoy, pero una dep faltante es una trampa cargada — el día que alguien haga
+    // que el checkout cambie de paso sin remontar, este handler seguiría
+    // reclamando contra el slug viejo. Detectado en la auditoría del 2026-09-11.
+    [sesion, esRecuperacion, slug],
   );
 
   const handleClickComprar = useCallback(() => {
