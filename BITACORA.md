@@ -423,9 +423,46 @@ Queda para una sesión que pueda probarlo con un comprador de verdad.
 - **Apple Pay:** el archivo `.well-known` ya da 200 en producción. Falta registrar el dominio en el
   dashboard de Whop. Google Pay no necesita este paso.
 
+### Tres cosas que aparecieron auditando y no estaban en la lista
+
+**Dos de los cuatro productos apuntaban a planes de la cuenta vieja.** Rotar la cuenta desde
+`/admin/conexion` no mueve los `whop_plan_id` de `productos`. Después de pasar a Atlas, "Chau
+Hinchazón" y "Acelerador 7X" seguían apuntando a planes de `biz_Me8Lbiv174brtM`. Y era invisible:
+`GET /plans/{id}` devuelve **200** para un plan de otra company, así que la pantalla los mostraba
+idénticos a los buenos; lo único que cambiaba era que cobrar con ellos falla con el mismo 400
+genérico que costó una hora diagnosticar esa noche.
+
+Ahora `/admin/productos` tiene **Revisar los planes contra Whop**, que compara el `account.id` del
+plan contra la company activa — el status HTTP no sirve para esto. Medido en producción: detecta los
+dos malos, marca los dos buenos. Va detrás de un botón porque es una llamada por producto para un
+dato que cambia cuando se rota la cuenta, o sea casi nunca. `indeterminado` (401/403/5xx/timeout) NO
+cuenta como problema: un 401 significa "no pudimos preguntar", y tratarlo como error mandaría a
+cambiar un `whop_plan_id` que está bien.
+
+**Un test flaky abortaba uno de cada tres deploys.** `cripto.test.ts > un dato manipulado falla por
+el tag de GCM` cambiaba el ÚLTIMO CARÁCTER del base64 del ciphertext. Los 23 bytes de 'secreto'
+ocupan 31 caracteres base64url = 186 bits, así que **los últimos dos bits son padding**: cuando el
+cambio de `A` a `B` caía ahí, los bytes decodificados quedaban iguales, GCM validaba bien —
+correctamente — y el test fallaba. Intermitente porque el IV es aleatorio.
+
+El código estaba bien y el test estaba mal, que es el peor reparto: manda a buscar el problema donde
+no está. Ahora se invierte un byte con XOR sobre los datos decodificados, y se agregó el test que
+recorre las 23 posiciones — la propiedad real de AES-GCM es que *cualquier* alteración invalida el
+tag, y probarla en una sola dejaba 22 sin cubrir. 20 corridas seguidas, 0 fallos.
+
+**El bot de Telegram se configura con un comando.** `scripts/configurar-telegram.sh` verifica el
+token contra `getMe`, genera los secretos, lee el `chat_id` de `getUpdates`, registra el webhook y
+escribe las variables (con `--produccion`, en la VPS con backup y recargando PM2). El `chat_id` se
+pide ANTES del `setWebhook` y no es un orden arbitrario: con el webhook activo, Telegram entrega ahí
+y `getUpdates` viene vacío para siempre.
+
 ### Qué queda pendiente y es de otro
 
 1. **La respuesta de soporte de Whop sobre el 400 del cobro off-session.** Es lo que bloquea el
    lanzamiento del upsell one-click, no un bug de este código.
-2. Registrar el webhook desde el dashboard (sección 3.4 de ESTADO) y crear el bot de Telegram (3.7).
+2. Registrar el webhook desde el dashboard (sección 3.4 de ESTADO) y crear el bot de Telegram (3.7,
+   ahora con el script que hace todo salvo hablar con @BotFather).
 3. Registrar el dominio para Apple Pay en el dashboard de Whop (3.11).
+4. **Los dos productos que apuntan a planes de Sinvanapp.** O se recrean los planes en Atlas, o se
+   vuelven a vincular desde `/admin/catalogo`, que solo ofrece planes de la cuenta activa. Mientras
+   sigan así, cualquier funnel que los use no va a poder cobrar.
