@@ -1,6 +1,19 @@
 # El cobro one-click de un upsell contra Whop: todo lo que se probó
 
-**Estado: sin resolver.** Última medición 2026-09-11.
+**Estado: cerrado del lado nuestro. El bloqueo es de Whop.** Última medición
+2026-09-11, después de agotar diez hipótesis.
+
+**La conclusión, arriba porque es lo único que hay que leer si no vas a leer el
+resto:** `POST /payments` con una tarjeta guardada devuelve `400` genérico en
+**dos cuentas de Whop independientes**, en tres versiones de API, con los permisos
+confirmados como concedidos por la propia API de Whop, y sin un solo
+`payments#create` exitoso en la historia de ninguna de las dos cuentas. No es el
+payload, ni la versión, ni los permisos, ni el plan, ni la tarjeta, ni el webhook,
+ni la cuenta. **No hay nada más que ajustar de este lado.**
+
+Lo que sí funciona hoy, y está en producción: el botón de wallet
+(`data-hilvana-wallet`), que cobra on-session en un toque con Apple Pay, Google
+Pay o tarjeta. Ver §11.
 
 Este documento es autosuficiente a propósito: se escribió para que alguien sin
 contexto del repo —otra persona, otro modelo— pueda leerlo y proponer algo que no
@@ -225,9 +238,11 @@ Dos cosas que sí quedaron aprendidas:
 
 ---
 
-## 5. Lo que queda vivo
+## 5. Lo que quedaba vivo — LAS DOS DESCARTADAS EL 2026-09-11
 
-Dos cosas, y las dos son del lado de Whop:
+> **Las dos hipótesis de esta sección están muertas.** Se probaron cambiando de
+> cuenta entera: ver §10.3. Se deja el texto porque el dato del `risk_score` sigue
+> siendo cierto y útil para entender el comportamiento del motor de riesgo.
 
 ### 5.1 `risk_score: 85`
 
@@ -436,26 +451,226 @@ la venta:
    recuperación. El comprador va al checkout del upsell y completa la
    autenticación ahí. Verificado con tráfico real: 01:27 con la versión vieja el
    cobro quedó `fallido`; 01:56 con la nueva quedó `requiere_tarjeta`.
-2. **Botón de Apple Pay / Google Pay** (`WhopExpressCheckoutButton`), primero en la
-   pantalla de recuperación y después también en el funnel. Cobra en un toque con
-   confirmación biométrica, sin pasar por el off-session. **Rechazado por
-   requisito de producto:** un segundo botón parte la atención.
+2. **Botón de Apple Pay / Google Pay / Whop Pay** (`WhopExpressCheckoutButton`).
+   Cobra en un toque, sin pasar por el off-session, y el wallet resuelve la
+   autenticación del banco solo.
+
+   **La primera versión se rechazó por requisito de producto**, y con razón: estaba
+   *al lado* del botón verde, y dos botones parten la atención en el momento de
+   decisión.
+
+   **Eso cambió el 2026-09-11.** Ahora es **el** botón, no un segundo botón: un
+   solo elemento que renderiza Apple Pay, Google Pay o Whop Pay según el browser,
+   así que también cubre el caso de la tarjeta tipeada (ver §11). Con el
+   off-session descartado en diez hipótesis, es la única forma de tener one-click,
+   y está en producción con el panel entregándolo por default.
 
 ---
 
-## 10. Los caminos que quedan
+## 10. Las tres hipótesis que se descartaron el 2026-09-11 por la tarde
 
-1. **Verificar la company en el dashboard de Whop.** Gratis, y es una de las dos
-   hipótesis vivas.
-2. **Escalar a soporte de Whop** con los IDs de la sección 8, pidiendo que miren el
-   log de ese cobro puntual. Con siete hipótesis descartadas no pueden responder
-   con documentación genérica.
-3. **Averiguar qué manda el backend de KashPay a Whop.** Es la única incógnita real
-   que queda. Si ellos logran el cobro con Whop, hay un payload o un endpoint que
-   no encontramos.
-4. **Agregar Stripe como segundo procesador**, que es lo que hace KashPay. Con
+Con esto llegan a diez. Las tres se midieron contra la API real.
+
+### 10.1 La versión de API: el proxy legacy vs. Payments nativo — DESCARTADA
+
+Era la hipótesis principal y era **falsa**, pero dejó datos que sirven.
+
+El changelog de Whop dice que `POST /payments` pasó a ser servido por la API
+nativa en una versión posterior a `2026-08-21-1`, que es el pin global de este
+repo. Dos pruebas que ya estaban en este documento sin ser interpretadas lo
+confirmaban:
+
+- Sin `account_id`, el endpoint respondía `{"code":"parameter_missing","param":"company_id"}`.
+  Nombra el parámetro **legacy**; el nativo toma `account_id`.
+- Un plan inline con `one_time` daba *"billing period cannot be zero if the plan is
+  a renewal"*. El body legacy **no tiene** campo `plan_type`; el nativo sí. El
+  valor se ignoraba en silencio.
+
+**El límite exacto, medido:**
+
+| Versión | `POST /payments` sin `account_id` responde | Superficie |
+|---|---|---|
+| `2026-08-21-1` (el pin del repo) | `Missing required parameter: company_id` | proxy legacy |
+| `2026-09-02` | `Missing required parameter: company_id` | proxy legacy |
+| `2026-09-02-1` | `account_id is required` | **nativo** |
+| `2026-09-11` | `account_id is required` | **nativo** |
+
+Y la lista completa de versiones válidas se saca mandando una inventada:
+
+```
+GET /payments?account_id=... con Api-Version-Date: 1999-01-01
+→ 400 "Unknown Api-Version-Date. Supported versions: 2025-01-01, 2026-06-08,
+   2026-06-09, 2026-06-20, 2026-07-01, 2026-07-08, 2026-07-08-1, 2026-07-18,
+   2026-07-20, 2026-07-22, 2026-07-23, 2026-07-25, 2026-07-26, 2026-07-27,
+   2026-07-29, 2026-07-29-1, 2026-07-31, 2026-08-03, 2026-08-05, 2026-08-05-1,
+   2026-08-10, 2026-08-12, 2026-08-13, 2026-08-14, 2026-08-21, 2026-08-21-1,
+   2026-08-25, 2026-08-25-1, 2026-08-25-2, 2026-08-31, 2026-09-02, 2026-09-02-1,
+   2026-09-02-2, 2026-09-04, 2026-09-06, 2026-09-09, 2026-09-09-1, 2026-09-11."
+```
+
+Ojo: ese 400 sale en `/payments`, que **sí** es sensible a la versión. En
+`GET /companies/{id}` una fecha inventada devuelve **200**, porque ese endpoint no
+tiene variante versionada y el header se ignora. No sirve para descubrir versiones.
+
+**Pero el cobro falla igual en las tres superficies.** Medido con los cuatro IDs
+reales de §8:
+
+| Intento | Resultado |
+|---|---|
+| `2026-08-21-1` (proxy) | `400` genérico |
+| `2026-09-02-1` (nativo) | `400` genérico |
+| `2026-09-11` (nativo, la última) | `400` genérico |
+| nativo + `capture: false` | `400` genérico |
+
+### 10.2 Un permiso faltante — DESCARTADA POR SEGUNDA VEZ, ahora sin inferir
+
+§4.3 lo descartaba probando scopes contra endpoints de lectura. Whop tiene un
+endpoint que lo contesta directo:
+
+```
+GET /permissions?resource_id=biz_...
+→ 261 acciones, entre ellas:
+     payment:charge                  true
+     member:payment_methods:use      true
+     member:payment_methods:read     true
+     payment:setup_intent:read       true
+```
+
+**`payment:charge` está concedido.** Ya no es una inferencia a partir de la forma
+del error: es la respuesta de Whop. Los permisos quedan descartados de raíz.
+
+### 10.3 El webhook y la cuenta — DESCARTADAS LAS DOS, y eran las últimas
+
+Las dos hipótesis vivas de §5 (company sin verificar) y la del webhook faltante se
+probaron cambiando de cuenta entera.
+
+**Lo que se hizo:** se cambió la cuenta que cobra a `biz_Me8Lbiv174brtM`
+("Sinvanapp"), se creó su webhook con los seis eventos, se cargó su signing secret,
+se crearon **planes nuevos en esa cuenta** (`plan_DnlPA9GLNvuF9` para el front,
+`plan_tzGuzhZAV8R0x` para el upsell, los dos `one_time` de US$ 1) y se hizo una
+compra real del front.
+
+**Lo que se verificó antes de probar:** el webhook funcionando (dos
+`payment.succeeded` recibidos, cero sin procesar), los dos planes pertenecientes a
+la cuenta activa, y el front y el upsell en el mismo funnel.
+
+**El resultado:**
+
+```
+2026-09-11T13:52:34  [upsell/cobrar] orden 1233be69… slug=sdasdad
+2026-09-11T13:52:34  [upsell/cobrar] cobro 877870c8…: 400 de Whop sin código
+                     (We could not process this payment request right now.)
+                     → requiere_tarjeta
+```
+
+**El mismo 400, en una cuenta independiente, con webhook funcionando y planes
+propios.** Ni la verificación de la company ni el webhook eran la causa.
+
+### 10.4 Dos datos que cierran el caso
+
+**El rechazo tarda 66–85 ms.** Medido en `api_logs`. No hay ida y vuelta al
+procesador: es una política interna de Whop. Por eso nunca hubo `decline_code` —
+la transacción no llegó a existir.
+
+**Nunca hubo un `payments#create` exitoso en ninguna de las dos cuentas.** Whop
+expone el log de las llamadas hechas con las API keys de la cuenta:
+
+```
+GET /api_logs?account_id=...&operation_name=api/v1/payments%23create&status=success
+→ 0 filas
+```
+
+Y esto responde la que era **la última incógnita real** de este documento (la
+vieja §10.3, "averiguar qué manda el backend de KashPay"): en `api_logs` aparece
+la key de KashPay, identificable por su user agent.
+
+```
+api_key_id: apik_qGpCBhkCguzDq
+user_agent: Deno/2.1.4 (variant; SupabaseEdgeRuntime/1.76.0; ref=jzrwfrdwgjuarybyegao)
+```
+
+Filtrando sus POST:
+
+```
+GET /api_logs?api_key_id=apik_qGpCBhkCguzDq&http_method=POST
+→ 1 fila: create_checkout_configuration, POST 200
+```
+
+**Un solo POST en toda su historia, y fue un checkout.** KashPay nunca cobró
+off-session en esta cuenta tampoco. No hay un payload secreto que se nos escape:
+su camino de Whop manda al comprador a un checkout, que es exactamente lo que su
+código del lado del cliente deja ver en §7.3 y §7.4.
+
+---
+
+## 11. Lo que funciona hoy, y está en producción
+
+El botón de wallet: `<div data-hilvana-wallet="<slug>"></div>`.
+
+No pasa por el off-session. Le pide una sesión al server y monta
+`<whop-express-checkout-button>`, que cobra **on-session** en un toque:
+
+| Browser | Qué renderiza |
+|---|---|
+| Safari con tarjeta en el Wallet | Apple Pay, se aprueba con Face ID |
+| Chrome / Android con Google Pay | Google Pay, sin diálogo |
+| Todo lo demás | **Whop Pay**, un diálogo que acepta tarjeta tipeada |
+
+Es **un** elemento y cubre los tres casos, así que no hace falta dejar el botón
+viejo al lado "para los que no tienen wallet": Whop Pay ES el caso de la tarjeta.
+El loader no manda el atributo `methods`, así que los tres quedan habilitados.
+
+Y resuelve la autenticación del banco, que es lo que el off-session no puede: el
+3DS lo hace el dispositivo. El `client_secret` de un pago creado desde un método
+guardado viene **`null`**, así que por ese camino no hay forma de continuar un
+desafío — la misma limitación que tiene KashPay.
+
+El panel lo entrega por default en el editor de funnels, con el botón off-session
+como segunda opción y un aviso de que no lo use.
+
+### 11.1 Por qué Apple Pay NO arregla el off-session
+
+Es la pregunta que aparece sola y la respuesta es al revés de lo que parece.
+
+| Apple Pay usado como… | Sirve? |
+|---|---|
+| Método **guardado**, para cobrar después sin el comprador | **No.** Imposible por diseño de la red |
+| Método **en el momento del click**, con Face ID | **Sí.** Es el botón de wallet |
+
+Un token de Apple Pay es un **DPAN atado al dispositivo** y exige autenticación
+biométrica en cada transacción. Medido en §4.6: `payt_6LXxXQSekTbrs` vino sin
+`fingerprint` y sin expiración, y el off-session contra él dio el mismo 400. Pagar
+el front con Apple Pay deja el one-click **peor**, no mejor.
+
+Apple Pay resuelve el click, no la tarjeta guardada.
+
+---
+
+## 12. Lo que queda, y ya no es técnico de este lado
+
+1. **Escalar a Whop.** Es lo único que puede destrabar el off-session. El caso ya
+   no se puede contestar con documentación: dos cuentas independientes,
+   `payment:charge` concedido según su propia API, rechazo en 66 ms sin
+   `decline_code`, cero `payments#create` exitosos en la historia de ambas cuentas,
+   e IDs concretos en §8. Pediles el log interno de esos cobros y qué política los
+   rechaza.
+
+2. **Pre-autorizar con `capture: false`.** El create-payment nativo acepta un hold
+   de autorización, capturable dentro de 5 días con `POST /payments/{id}/capture`.
+   Autorizar el monto del upsell **durante el checkout del front**, con el
+   comprador presente y el 3DS resolvible, y capturar al click. Cero interacción en
+   el momento del click, garantizado. Costo: retiene fondos de todo el que vea el
+   upsell, un hold por monto, y la captura es del total. **Nota:** el hold usa el
+   mismo `POST /payments`, así que hay que medir si el 400 también lo alcanza.
+
+3. **Stripe como segundo procesador**, que es lo que hace KashPay para el 3DS. Con
    Stripe el off-session funciona: soporta MIT con exención de SCA y devuelve
-   `client_secret` para resolver la autenticación en el navegador cuando hace
-   falta. Es el único camino que ya sabemos que funciona para un cobro sin ninguna
-   interacción. Costo: otro procesador, otras credenciales, otro webhook, y la
-   decisión de a dónde va el dinero.
+   `client_secret` para resolver la autenticación en el navegador. Es el único
+   camino que ya sabemos que funciona para un cobro sin ninguna interacción. Costo:
+   otro procesador, otras credenciales, otro webhook, y la decisión de a dónde va
+   el dinero.
+
+**Lo que ya NO hay que volver a probar** (y esto es la mitad del valor de este
+documento): la versión de API, los permisos, el webhook, cambiar de cuenta,
+verificar la company, el tipo de tarjeta, el plan, el payload, `capture:false`, ni
+buscar qué hace KashPay diferente. Las diez están medidas y descartadas.

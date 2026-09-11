@@ -474,3 +474,143 @@ y `getUpdates` viene vacío para siempre.
 4. **Los dos productos que apuntan a planes de Sinvanapp.** O se recrean los planes en Atlas, o se
    vuelven a vincular desde `/admin/catalogo`, que solo ofrece planes de la cuenta activa. Mientras
    sigan así, cualquier funnel que los use no va a poder cobrar.
+
+---
+
+## 2026-09-11 (tarde) — El off-session queda cerrado: diez hipótesis, dos cuentas, y el one-click que sí funciona
+
+Commits: `a9712db`, `162ce97` (checkout) y `633dbf6` (funnel). Releases en producción:
+`20260911132232` (hilvapay) y `20260911134033` (chauhinchazon).
+
+### De dónde salió
+
+El pedido era leer la documentación de Whop entera y encontrar la falla del one-click. Se leyó
+(`llms.txt`, la API versionada, el changelog de versiones, Elements, invoices, setup intents) y salió
+una hipótesis fuerte que resultó **falsa**. Lo valioso vino después: usar la propia API de Whop para
+medir en vez de razonar.
+
+### La hipótesis que se cayó, y por qué igual sirvió
+
+**Hipótesis:** `POST /payments` en el pin `2026-08-21-1` lo sirve el **proxy legacy**, no la API
+nativa, y el flujo documentado en `save-payment-methods` es el nativo.
+
+Se confirmó que la distinción es real y que estábamos del lado viejo. El límite exacto:
+
+| Versión | `POST /payments` sin `account_id` | Superficie |
+|---|---|---|
+| `2026-08-21-1` (el pin) | `Missing required parameter: company_id` | proxy |
+| `2026-09-02` | `company_id` | proxy |
+| `2026-09-02-1` | `account_id is required` | **nativo** |
+
+Y dos pruebas que ya estaban en el diagnóstico sin ser interpretadas lo decían desde el principio: el
+error nombraba `company_id` (el parámetro legacy), y un plan inline con `one_time` fallaba porque el
+body legacy **no tiene** campo `plan_type`.
+
+**Pero el cobro falla igual en las tres superficies.** La hipótesis explicaba todo lo observado y no
+era la causa. Se anotó como descartada en vez de borrarla: era la más plausible y alguien la va a
+volver a pensar.
+
+Dato útil que quedó: mandando un `Api-Version-Date` inventado a `/payments`, Whop devuelve **la lista
+completa de las 38 versiones válidas**. En `GET /companies/{id}` la misma fecha inválida da 200 — ese
+endpoint no está versionado y el header se ignora, así que no sirve para descubrir versiones.
+
+### Lo que cerró el caso: `GET /api_logs`
+
+Whop expone el log de las llamadas hechas con las keys de la cuenta, filtrable por `operation_name`,
+`status`, `api_key_id` y `http_method`. Tres cosas salieron de ahí:
+
+1. **Cero `payments#create` exitosos en toda la historia de la cuenta.** No es que falle ahora: nunca
+   funcionó.
+2. **El rechazo tarda 66–85 ms.** No hay ida y vuelta al procesador — es una política interna. Por eso
+   nunca hubo `decline_code`: la transacción no llegó a existir.
+3. **Aparece la key de KashPay**, identificable por su user agent
+   (`Deno/2.1.4 … SupabaseEdgeRuntime … ref=jzrwfrdwgjuarybyegao`). Filtrando sus POST:
+   **un solo POST en toda su historia, y fue `create_checkout_configuration`.**
+
+Ese punto 3 responde la que era **la última incógnita real del diagnóstico** (su §10.3): qué manda el
+backend de KashPay a Whop. Respuesta: **nada.** Tampoco cobran off-session — mandan al comprador a un
+checkout. No hay un payload secreto.
+
+Y `GET /permissions?resource_id=biz_...` contestó lo de los scopes sin inferir: **`payment:charge`
+está concedido**, junto con `member:payment_methods:use`. 261 acciones listadas.
+
+### Las dos últimas hipótesis, probadas cambiando de cuenta entera
+
+Quedaban vivas la company sin verificar y —propuesta por el dueño— el webhook faltante. Se probaron
+juntas: cuenta nueva (`biz_Me8Lbiv174brtM`), su webhook creado y funcionando, su signing secret
+cargado, **planes nuevos de esa cuenta**, y una compra real del front.
+
+```
+13:52:34  [upsell/cobrar] cobro 877870c8…: 400 de Whop sin código → requiere_tarjeta
+```
+
+**El mismo 400.** Diez hipótesis descartadas. El bloqueo es de Whop y solo Whop puede levantarlo.
+
+### Lo que se construyó
+
+**El signing secret se carga del panel** (migración 007). Salía solo de `WHOP_WEBHOOK_SECRET`, así que
+rotar la cuenta desde `/admin/conexion` dejaba la mitad del cambio afuera — y cada webhook de Whop
+tiene el suyo. El modo de falla no tiene síntoma: los cobros entran, el endpoint rechaza cada entrega
+con 400, y **nadie recibe lo que compró**. Se ve como "nadie compró".
+
+Y se midió que había pasado: la cuenta que cobraba **no tenía ningún webhook registrado**, porque el
+que existía era de la cuenta anterior. Los `member_id` y `payment_method_id` que sí quedaron guardados
+llegaron por el **claim sincrónico** de `/api/checkout/reclamar`, no por el webhook. La redundancia
+salvó el dato, no la entrega.
+
+Como Whop no expone ningún endpoint que valide un signing secret, la pantalla no promete una
+verificación que no puede hacer: cuenta los eventos que llegaron a `whop_eventos`. **Cero eventos
+después de un Send event ES el diagnóstico.**
+
+**El panel entrega el botón de wallet.** El `loader.js` ya soportaba `data-hilvana-wallet` y el panel
+no lo ofrecía. Ahora va por default en el editor de funnels, con el off-session como segunda opción y
+un aviso de que no se use.
+
+La primera versión del botón express se había rechazado por producto, con razón: estaba **al lado** del
+verde y dos botones parten la atención. Ahora es **el** botón: un solo elemento que renderiza Apple
+Pay, Google Pay o **Whop Pay** según el browser — y Whop Pay es un diálogo que acepta tarjeta tipeada,
+así que un botón cubre los tres casos.
+
+**Un botón de actualizar en el catálogo.** La pantalla ya era `force-dynamic` con `cache: no-store`, o
+sea que el problema nunca fue el caché: era que para recargar había que apretar F5, y F5 en un panel se
+siente como "se colgó".
+
+### El bug del funnel que costó media hora
+
+El botón del upsell no hacía nada. Los logs del endpoint estaban vacíos, así que el click no llegaba.
+No era eso:
+
+```
+[upsell/cobrar] el paso upsell-1x2 es del funnel d2d43184… y la orden es del 1633621a… → 404
+```
+
+El botón pedía un slug de **otro funnel** que la orden. El guard que lo rechaza es correcto — evita
+cobrar el producto de otro funnel — pero desde el browser se ve como "no hace nada".
+
+La causa de fondo: **dos funnels con el mismo nombre**, los dos activos. Está anotado en ESTADO como
+cosa a limpiar. El slug correcto (`sdasdad`) quedó en `VslOfferBlockLatam.tsx` del repo del funnel, con
+el comentario explicando **por qué no es `upsell-1x2`** para que nadie lo "corrija" de vuelta.
+
+### Lo que se aprendió, y sería caro volver a descubrir
+
+- **`GET /api_logs` es la herramienta de diagnóstico de Whop**, y no está en ninguna guía. Contesta
+  "esto funcionó alguna vez" y "quién más le pega a esta cuenta".
+- **Un `Api-Version-Date` inválido en un endpoint versionado devuelve la lista de versiones.** En uno
+  no versionado devuelve 200 y no dice nada.
+- **Apple Pay no arregla el off-session, lo empeora.** Un DPAN exige biometría en cada transacción.
+  Apple Pay resuelve el *click*, no la tarjeta guardada.
+- **Preguntarle al bot de Whop "por qué falla" no sirve** — devuelve la guía. Sí sirve preguntarle
+  cosas verificables. El valor de sus respuestas salió de contrastarlas contra las mediciones propias,
+  no de las respuestas en sí.
+- **Repetir un cobro off-session fallido contra la misma tarjeta es la firma del card testing.** Con
+  cuentas sin verificar y `risk_score` 70–85, conviene un intento por hipótesis y no diez.
+
+### Qué quedó pendiente
+
+- **Escalar a Whop.** Es lo único que destraba el off-session. El caso está armado en §12 del
+  diagnóstico.
+- **Dos funnels con el mismo nombre**, los dos activos. Renombrar uno o desactivar `d2d43184`.
+- **`WHOP_WEBHOOK_SECRET` del `.env.production` es de la cuenta vieja.** Hoy gana el override de la
+  base, así que funciona, pero el piso de respaldo apunta a otro lado.
+- **El upsell de prueba sale US$ 1**, igual que el front. Para distinguir los dos cobros en el panel
+  conviene un precio distinto.
