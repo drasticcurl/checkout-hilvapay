@@ -43,6 +43,9 @@ type FilaConfig = {
   whop_verificado_at: Date | null;
   whop_company_nombre: string | null;
   whop_api_key_huella: string | null;
+  whop_webhook_secret_cifrado: string | null;
+  whop_webhook_secret_huella: string | null;
+  whop_webhook_secret_at: Date | null;
 };
 
 const TTL_CACHE_MS = 30_000;
@@ -66,14 +69,15 @@ async function leerFila(): Promise<FilaConfig | null> {
     return await q1<FilaConfig>(
       `select whop_api_key_cifrada, whop_company_id, whop_api_base,
               whop_api_version_date, whop_verificado_at, whop_company_nombre,
-              whop_api_key_huella
+              whop_api_key_huella, whop_webhook_secret_cifrado,
+              whop_webhook_secret_huella, whop_webhook_secret_at
          from config where id = 1`,
     );
   } catch (err) {
-    // La migración 006 puede no estar aplicada todavía (por ejemplo, entre el
-    // deploy y la migración, o en un entorno viejo). Eso NO puede tumbar un
-    // cobro: se cae a las variables de entorno, que es exactamente el estado
-    // anterior a esta feature.
+    // La migración 006 o la 007 pueden no estar aplicadas todavía (por ejemplo,
+    // entre el deploy y la migración, o en un entorno viejo). Eso NO puede tumbar
+    // un cobro ni un webhook: se cae a las variables de entorno, que es
+    // exactamente el estado anterior a estas features.
     console.error('[whop-credenciales] no se pudo leer config, se usa el entorno:', err);
     return null;
   }
@@ -150,6 +154,121 @@ export async function resolverCredenciales(): Promise<{
 
   cache = { valor: resuelto.credenciales, fuente: resuelto.fuente, vence: Date.now() + TTL_CACHE_MS };
   return resuelto;
+}
+
+/* ──────────────────── El signing secret del webhook (migración 007) ───────── */
+
+/**
+ * El secret tiene su propio caché, separado del de las credenciales.
+ *
+ * No comparte el de arriba a propósito: `resolverCredenciales` lo llama cada
+ * cobro y `resolverWebhookSecret` cada entrega de webhook, que son dos caminos
+ * calientes distintos. Un caché compartido haría que guardar la API key
+ * invalidara también el secret, y al revés — y el webhook es donde menos conviene
+ * un round-trip extra a Postgres: Whop reintenta si tardamos más de 5 segundos.
+ */
+let cacheSecret: { valor: string; fuente: FuenteCredenciales; vence: number } | null = null;
+
+/** Tira el caché del secret. La llama el guardado del panel. */
+export function invalidarCacheWebhookSecret(): void {
+  cacheSecret = null;
+}
+
+/**
+ * El signing secret que hay que usar para verificar la firma, con el mismo orden
+ * que las credenciales: la base gana, el entorno es el piso.
+ *
+ * Devuelve `''` si no hay ninguno, en vez de tirar. Eso es deliberado:
+ * `verificarWebhook` ya trata la cadena vacía como "no está configurada" y
+ * responde 400 con un mensaje claro. Tirar acá convertiría un problema de
+ * configuración en un 500, y un 500 le dice a Whop "reintentá", que es lo
+ * contrario de lo que conviene con una firma que nunca va a validar.
+ */
+export async function resolverWebhookSecret(): Promise<{
+  secret: string;
+  fuente: FuenteCredenciales;
+}> {
+  if (cacheSecret && cacheSecret.vence > Date.now()) {
+    return { secret: cacheSecret.valor, fuente: cacheSecret.fuente };
+  }
+
+  const fila = await leerFila();
+  let resuelto: { secret: string; fuente: FuenteCredenciales } | null = null;
+
+  if (fila?.whop_webhook_secret_cifrado) {
+    try {
+      resuelto = { secret: await descifrar(fila.whop_webhook_secret_cifrado), fuente: 'base' };
+    } catch (err) {
+      const motivo =
+        err instanceof SinClaveDeCifrado
+          ? 'falta CONFIG_ENCRYPTION_KEY'
+          : err instanceof CifradoInvalido
+            ? err.message
+            : String(err);
+      // Mismo criterio que la API key: preferir el valor anterior a no tener
+      // ninguno. Un webhook que rechaza todo deja las órdenes sin entregar.
+      console.error(
+        `[whop-credenciales] el webhook secret guardado no se pudo descifrar (${motivo}); se usa el entorno`,
+      );
+    }
+  }
+
+  if (!resuelto) {
+    resuelto = { secret: process.env.WHOP_WEBHOOK_SECRET?.trim() ?? '', fuente: 'entorno' };
+  }
+
+  cacheSecret = { valor: resuelto.secret, fuente: resuelto.fuente, vence: Date.now() + TTL_CACHE_MS };
+  return resuelto;
+}
+
+/**
+ * Se rechaza en el panel antes de guardar. No hay endpoint en Whop que valide un
+ * signing secret, así que este chequeo de forma es lo único que se puede hacer
+ * localmente — y ataja el error real: pegar el secret recodificado en base64, o
+ * pegar la API key en el campo equivocado.
+ */
+export function formaDeSecretValida(secret: string): boolean {
+  return /^ws_[A-Za-z0-9_\-+/=]{16,}$/.test(secret.trim());
+}
+
+/**
+ * Guarda el signing secret cifrado. Sin verificación previa contra Whop porque no
+ * existe: lo que lo verifica de verdad es **Send event** desde el dashboard, y el
+ * resultado de eso se ve en `whop_eventos` (lo muestra el panel).
+ */
+export async function guardarWebhookSecret(secret: string): Promise<void> {
+  if (!hayClaveDeCifrado()) throw new SinClaveDeCifrado();
+
+  const limpio = secret.trim();
+  const sobre = await cifrar(limpio);
+  const marca = await huella(limpio);
+
+  await q1(
+    `update config
+        set whop_webhook_secret_cifrado = $1,
+            whop_webhook_secret_huella  = $2,
+            whop_webhook_secret_at      = now(),
+            updated_at                  = now()
+      where id = 1
+      returning id`,
+    [sobre, marca],
+  );
+
+  invalidarCacheWebhookSecret();
+}
+
+/** Vuelve a `WHOP_WEBHOOK_SECRET`: borra el override de la base. */
+export async function borrarWebhookSecret(): Promise<void> {
+  await q1(
+    `update config
+        set whop_webhook_secret_cifrado = null,
+            whop_webhook_secret_huella  = null,
+            whop_webhook_secret_at      = null,
+            updated_at                  = now()
+      where id = 1
+      returning id`,
+  );
+  invalidarCacheWebhookSecret();
 }
 
 /* ─────────────────────────── Verificación contra Whop ─────────────────────── */
@@ -422,6 +541,13 @@ export type EstadoCredenciales = {
   hayClaveDeCifrado: boolean;
   /** true si el entorno tiene las cuatro: es el piso al que se puede volver. */
   entornoCompleto: boolean;
+  /** ── El signing secret del webhook (migración 007) ── */
+  /** true si hay un secret usable, venga de la base o del entorno. */
+  hayWebhookSecret: boolean;
+  /** De dónde sale el secret que se está usando ahora. */
+  webhookSecretFuente: FuenteCredenciales;
+  /** Cuándo se cargó el override de la base. NULL si el secret sale del entorno. */
+  webhookSecretAt: string | null;
   /** Presente solo si algo está mal y hay que decirlo en pantalla. */
   problema: string | null;
 };
@@ -446,6 +572,12 @@ export async function estadoCredenciales(): Promise<EstadoCredenciales> {
       'Hay una API key guardada en la base pero falta CONFIG_ENCRYPTION_KEY, así que no se puede descifrar. El servicio está usando la del entorno.';
   }
 
+  // El secret se resuelve aparte de las credenciales: puede venir de la base
+  // mientras la key viene del entorno, y al revés. Mostrar las dos fuentes por
+  // separado es lo que permite diagnosticar "cambié de cuenta pero me olvidé el
+  // secret", que es exactamente el caso que dejó a Atlas & Co. sin entregas.
+  const { secret, fuente: webhookSecretFuente } = await resolverWebhookSecret();
+
   try {
     const { credenciales, fuente } = await resolverCredenciales();
     return {
@@ -458,6 +590,10 @@ export async function estadoCredenciales(): Promise<EstadoCredenciales> {
       verificadoAt: fuente === 'base' ? fila?.whop_verificado_at?.toISOString() ?? null : null,
       hayClaveDeCifrado: hayClaveDeCifrado(),
       entornoCompleto,
+      hayWebhookSecret: secret.length > 0,
+      webhookSecretFuente,
+      webhookSecretAt:
+        webhookSecretFuente === 'base' ? fila?.whop_webhook_secret_at?.toISOString() ?? null : null,
       problema,
     };
   } catch (err) {
@@ -474,6 +610,10 @@ export async function estadoCredenciales(): Promise<EstadoCredenciales> {
       verificadoAt: null,
       hayClaveDeCifrado: hayClaveDeCifrado(),
       entornoCompleto: false,
+      hayWebhookSecret: secret.length > 0,
+      webhookSecretFuente,
+      webhookSecretAt:
+        webhookSecretFuente === 'base' ? fila?.whop_webhook_secret_at?.toISOString() ?? null : null,
       problema: err instanceof Error ? err.message : String(err),
     };
   }

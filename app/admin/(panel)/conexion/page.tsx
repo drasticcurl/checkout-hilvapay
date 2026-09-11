@@ -9,6 +9,7 @@
  */
 import { Warning, WarningCircle } from '@phosphor-icons/react/ssr';
 import { estadoCredenciales } from '../../../../lib/whop-credenciales';
+import { estadoWebhook } from '../../../../lib/admin/webhook-estado';
 import {
   Aviso,
   Codigo,
@@ -17,6 +18,7 @@ import {
   Tarjeta,
 } from '../../../../components/panel/ui';
 import { FormularioCredenciales } from './FormularioCredenciales';
+import { FormularioWebhook } from './FormularioWebhook';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -32,6 +34,7 @@ function Dato({ etiqueta, children }: { etiqueta: string; children: React.ReactN
 
 export default async function ConexionPage(): Promise<JSX.Element> {
   const estado = await estadoCredenciales();
+  const webhook = await estadoWebhook(process.env.NEXT_PUBLIC_BASE_URL ?? '');
   const enProduccion = estado.base.includes('api.whop.com');
 
   return (
@@ -89,6 +92,21 @@ export default async function ConexionPage(): Promise<JSX.Element> {
       </Tarjeta>
 
       <FormularioCredenciales estado={estado} />
+
+      {/* El webhook es la otra mitad de "conectar Whop", y hasta la migración 007
+          no se podía tocar desde acá: el secret salía solo del env. Cambiar de
+          cuenta desde el formulario de arriba sin cambiar el secret deja el
+          servicio cobrando y sin entregar nada. Van juntos en la misma pantalla
+          por eso. */}
+      <FormularioWebhook
+        estado={{
+          hayWebhookSecret: estado.hayWebhookSecret,
+          webhookSecretFuente: estado.webhookSecretFuente,
+          webhookSecretAt: estado.webhookSecretAt,
+          hayClaveDeCifrado: estado.hayClaveDeCifrado,
+          webhook,
+        }}
+      />
 
       {/* El camino de vuelta cuando el panel ya no puede hablar con Whop y por lo
           tanto tampoco puede arreglarse desde el panel. Vale escribirlo acá y no

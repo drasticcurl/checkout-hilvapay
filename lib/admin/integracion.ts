@@ -46,6 +46,15 @@ export type SnippetDePaso = {
   html: string;
   /** JSX para un funnel en React/Next, que es el caso de este stack. */
   jsx: string;
+  /**
+   * El mismo paso con el botón de wallet (Apple Pay / Google Pay / Whop Pay) en
+   * vez del botón que cobra off-session. **Es el recomendado hoy**: el
+   * off-session está bloqueado del lado de Whop (ver `snippetWalletHtml`), y este
+   * camino cubre wallet Y tarjeta con un solo botón.
+   */
+  htmlWallet: string;
+  /** Lo mismo en JSX. */
+  jsxWallet: string;
   /** true si al paso le falta `url_externa` y por eso no se puede integrar todavía. */
   incompleto: boolean;
 };
@@ -226,6 +235,61 @@ export function snippetBotonJsx(paso: PasoParaSnippet, precio: string): string {
 }
 
 /**
+ * El botón de wallet: Apple Pay, Google Pay o Whop Pay, en HTML plano.
+ *
+ * ── Por qué existe, y por qué es el recomendado hoy ──────────────────────────
+ * `data-hilvana-upsell` cobra por `POST /api/upsell/cobrar`, que hace un cobro
+ * off-session contra la tarjeta guardada. **Ese camino está bloqueado del lado de
+ * Whop**: devuelve `400 bad_request` genérico, sin `decline_code`, sin crear
+ * ningún Payment, y rechazando en 66 ms — o sea antes de llegar al procesador.
+ * Medido el 2026-09-11 en tres versiones de API (`2026-08-21-1`, `2026-09-02-1`
+ * y `2026-09-11`), con `capture:false`, y con `payment:charge` confirmado como
+ * concedido por el propio endpoint de permisos de Whop. Nueve hipótesis
+ * descartadas; ver `tasks/checkout-whop/DIAGNOSTICO-ONE-CLICK.md`.
+ *
+ * `data-hilvana-wallet` no pasa por ahí. Le pide una sesión al server y monta el
+ * botón express de Whop, que cobra por el camino on-session — el único que
+ * funciona hoy.
+ *
+ * ── Un botón, y cubre tarjeta ───────────────────────────────────────────────
+ * Es UN elemento, no tres. Whop elige el método según el browser:
+ *
+ *   · Safari con una tarjeta en el Wallet  → Apple Pay, se aprueba con Face ID
+ *   · Chrome / Android con Google Pay      → Google Pay, sin diálogo
+ *   · Todo lo demás                        → **Whop Pay**, un diálogo que acepta
+ *                                             tarjeta tipeada
+ *
+ * Por eso no hace falta dejar el botón viejo al lado "para los que no tienen
+ * wallet": Whop Pay ES el caso de la tarjeta. El loader no manda el atributo
+ * `methods`, así que quedan habilitados los tres — restringirlo a `apple-pay` es
+ * lo único que puede dejar la página sin ningún botón.
+ *
+ * ── Y resuelve la autenticación del banco ───────────────────────────────────
+ * El wallet resuelve el 3DS en el dispositivo (Face ID, PIN). El cobro
+ * off-session no puede: su `client_secret` viene `null`, así que no hay forma de
+ * continuar un desafío. Es la misma limitación que tiene KashPay, que con Whop
+ * tira una excepción cuando el pago pide autenticación.
+ *
+ * Es un `<div>` vacío y no un `<button>` a propósito: el loader le mete adentro
+ * el custom element `<whop-express-checkout-button>`, que trae su propio botón
+ * con el estilo nativo de cada wallet. Apple no permite reestilar el suyo.
+ */
+export function snippetWalletHtml(paso: PasoParaSnippet): string {
+  return `<div data-hilvana-wallet="${paso.slug}"></div>`;
+}
+
+/**
+ * El botón de wallet en JSX.
+ *
+ * Igual que el HTML: un div vacío con el `data-*`. React no toca los atributos
+ * `data-*` al hidratar, y el custom element que el loader inyecta adentro queda
+ * fuera del árbol que React administra, así que no hay conflicto de hidratación.
+ */
+export function snippetWalletJsx(paso: PasoParaSnippet): string {
+  return `<div data-hilvana-wallet="${paso.slug}" />`;
+}
+
+/**
  * El link de rechazo: un `<a href>` común al destino que decidió el panel.
  *
  * NO usa `data-hilvana-rechazo` ni `window.hilvana.rechazarUpsell()`, y la razón
@@ -277,6 +341,24 @@ export function integracionDeFunnel(
         .trimEnd(),
       jsx: [
         snippetBotonJsx(paso, precio),
+        '',
+        paso.permite_rechazo ? snippetRechazo(pasosDestinoRechazo[paso.slug] ?? null) : null,
+      ]
+        .filter((l) => l !== null)
+        .join('\n')
+        .trimEnd(),
+      // El bloque de wallet lleva el mismo link de rechazo: el "no gracias" es
+      // del funnel y no depende de con qué se cobre.
+      htmlWallet: [
+        snippetWalletHtml(paso),
+        '',
+        paso.permite_rechazo ? snippetRechazo(pasosDestinoRechazo[paso.slug] ?? null) : null,
+      ]
+        .filter((l) => l !== null)
+        .join('\n')
+        .trimEnd(),
+      jsxWallet: [
+        snippetWalletJsx(paso),
         '',
         paso.permite_rechazo ? snippetRechazo(pasosDestinoRechazo[paso.slug] ?? null) : null,
       ]

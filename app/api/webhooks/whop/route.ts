@@ -37,6 +37,7 @@ import {
   resolverOrdenDePago,
 } from '@/lib/cobros';
 import { q, q1, qCount } from '@/lib/db';
+import { resolverWebhookSecret } from '@/lib/whop-credenciales';
 import { normalizarPago } from '@/lib/whop';
 import { FirmaInvalida, verificarWebhook, type EventoWhop } from '@/lib/whop-webhook';
 
@@ -51,7 +52,13 @@ export async function POST(req: Request): Promise<Response> {
 
   let evento: EventoWhop;
   try {
-    evento = verificarWebhook(crudo, headers, process.env.WHOP_WEBHOOK_SECRET ?? '');
+    // El secret sale de `config` si está cargado desde `/admin/conexion`, y del
+    // entorno si no (migración 007). Antes se leía SOLO de `process.env`, y eso
+    // era el motivo de que cambiar de cuenta de Whop desde el panel dejara el
+    // webhook con el secret de la cuenta anterior — rechazando todo con 400 y sin
+    // entregar nada, mientras los cobros seguían entrando.
+    const { secret } = await resolverWebhookSecret();
+    evento = verificarWebhook(crudo, headers, secret);
   } catch (err) {
     if (err instanceof FirmaInvalida) {
       console.warn('[webhook] firma rechazada:', err.message);

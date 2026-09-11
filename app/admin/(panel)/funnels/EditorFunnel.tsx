@@ -13,7 +13,7 @@ import {
   Warning,
 } from '@phosphor-icons/react/ssr';
 import type { FunnelConPasos } from '../../../../lib/admin/funnels';
-import { snippetBotonHtml, snippetBotonJsx, snippetRechazo } from '../../../../lib/admin/integracion';
+import { snippetBotonHtml, snippetBotonJsx, snippetRechazo, snippetWalletHtml, snippetWalletJsx } from '../../../../lib/admin/integracion';
 import { Dialogo } from '@/components/panel/Dialogo';
 import {
   Aviso,
@@ -572,6 +572,12 @@ function SnippetDelPaso({
   guardado: boolean;
 }): JSX.Element | null {
   const [lenguaje, setLenguaje] = useState<'html' | 'jsx'>('jsx');
+  // `wallet` por default y no `guardada`, y no es una preferencia estética: el
+  // cobro off-session (`data-hilvana-upsell`) está bloqueado del lado de Whop y
+  // devuelve un 400 genérico sin crear ningún pago. Entregar ese botón por
+  // default sería entregar un botón que no cobra. El de wallet cubre Apple Pay,
+  // Google Pay Y tarjeta (por el diálogo de Whop Pay) con un solo elemento.
+  const [modo, setModo] = useState<'wallet' | 'guardada'>('wallet');
   const [copiado, setCopiado] = useState(false);
 
   // Un paso NUEVO (sin `id`) no tiene slug confirmado en la base todavía: el
@@ -609,7 +615,13 @@ function SnippetDelPaso({
     paso.paso_rechazado_indice != null ? pasos[paso.paso_rechazado_indice]?.url_externa ?? null : null;
 
   const codigo = [
-    lenguaje === 'html' ? snippetBotonHtml(pasoParaSnippet, precio) : snippetBotonJsx(pasoParaSnippet, precio),
+    modo === 'wallet'
+      ? lenguaje === 'html'
+        ? snippetWalletHtml(pasoParaSnippet)
+        : snippetWalletJsx(pasoParaSnippet)
+      : lenguaje === 'html'
+        ? snippetBotonHtml(pasoParaSnippet, precio)
+        : snippetBotonJsx(pasoParaSnippet, precio),
     '',
     paso.permite_rechazo ? snippetRechazo(destino) : null,
   ]
@@ -630,6 +642,44 @@ function SnippetDelPaso({
 
   return (
     <div className="mt-2.5 space-y-1.5">
+      {/* El selector de CÓMO cobra va arriba del de lenguaje porque cambia qué
+          hace el botón, no cómo se escribe. */}
+      <div className="inline-flex rounded-ctrl border border-panel-bordeFuerte bg-panel-sup2 p-0.5">
+        {(
+          [
+            ['wallet', 'Apple Pay / tarjeta'],
+            ['guardada', 'Tarjeta guardada'],
+          ] as const
+        ).map(([valor, etiqueta]) => (
+          <button
+            key={valor}
+            type="button"
+            onClick={() => setModo(valor)}
+            aria-pressed={modo === valor}
+            className={unir(
+              'rounded-[5px] px-2 py-0.5 text-[11px] font-medium transition-colors duration-150',
+              modo === valor ? 'bg-panel-sup text-tinta shadow-panel' : 'text-tinta-3 hover:text-tinta',
+            )}
+          >
+            {etiqueta}
+          </button>
+        ))}
+      </div>
+
+      {modo === 'wallet' ? (
+        <p className="text-[11px] leading-relaxed text-tinta-3">
+          Un botón que cobra en un toque. Apple Pay en Safari, Google Pay en Chrome y Android, y en el
+          resto un diálogo de Whop que acepta <strong className="font-medium text-tinta-2">tarjeta</strong>.
+          El wallet resuelve la autenticación del banco solo.
+        </p>
+      ) : (
+        <p className="text-[11px] leading-relaxed text-alerta">
+          Cobra contra la tarjeta que se guardó en el front, sin ninguna interacción. Hoy Whop rechaza
+          este cobro con un error genérico y no crea ningún pago —{' '}
+          <strong className="font-medium">no lo uses todavía</strong>. Está en el diagnóstico del repo.
+        </p>
+      )}
+
       <div className="flex items-center justify-between gap-2">
         <div className="inline-flex rounded-ctrl border border-panel-bordeFuerte bg-panel-sup2 p-0.5">
           {(
