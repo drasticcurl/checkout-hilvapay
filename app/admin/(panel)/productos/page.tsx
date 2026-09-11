@@ -17,6 +17,7 @@ import {
   clasesBoton,
 } from '../../../../components/panel/ui';
 import { SwitchActivo } from '../SwitchActivo';
+import { RevisarPlanes } from './RevisarPlanes';
 
 export const dynamic = 'force-dynamic';
 
@@ -55,7 +56,14 @@ export default async function ProductosPage(): Promise<JSX.Element> {
           }
         />
       ) : (
-        <TablaEnvoltorio>
+        <>
+          {/* Antes de la tabla, no después: si hay un producto apuntando a un plan
+              de otra cuenta, eso es lo primero que hay que saber — la tabla no lo
+              puede mostrar, porque los productos rotos se ven idénticos a los
+              buenos. Ver RevisarPlanes.tsx. */}
+          <RevisarPlanes />
+
+          <TablaEnvoltorio>
           <thead>
             <tr>
               <Th>Nombre</Th>
@@ -96,6 +104,7 @@ export default async function ProductosPage(): Promise<JSX.Element> {
             ))}
           </tbody>
         </TablaEnvoltorio>
+        </>
       )}
     </div>
   );
