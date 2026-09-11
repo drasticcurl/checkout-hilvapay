@@ -325,6 +325,58 @@ const SCRIPT = `
       return await resp.json().catch(function () { return {}; });
     }
 
+    /**
+     * Le muestra al comprador que el pago falló, debajo del botón de wallet.
+     *
+     * ── Por qué el loader dibuja UI, si en general no lo hace ─────────────────
+     * Todo lo demás de este script es invisible a propósito: el funnel es dueño de
+     * su HTML y de su diseño. Pero un \`payment-error\` que solo va a la consola deja
+     * a alguien mirando un botón que no respondió, sin saber si se cobró, si tiene
+     * que reintentar, ni si perdió la oferta. Eso no es una decisión de diseño del
+     * funnel: es información que solo este script tiene.
+     *
+     * Se mantiene deliberadamente mínimo: un párrafo, sin colores de marca, sin
+     * fuentes propias, heredando el tamaño del contenedor. Si el funnel quiere algo
+     * propio, puede estilar \`.hilvana-error-pago\`.
+     *
+     * \`role="alert"\` para que un lector de pantalla lo anuncie: el comprador ciego
+     * es exactamente el que no puede darse cuenta solo de que el botón no hizo nada.
+     */
+    function mostrarErrorDePago(contenedor, mensaje, codigo) {
+      try {
+        if (!contenedor || !contenedor.parentNode) return;
+
+        var texto = mensaje
+          ? String(mensaje)
+          : 'No se pudo completar el pago. Probá de nuevo o usá otro medio.';
+        if (codigo) texto += ' (' + String(codigo) + ')';
+
+        // Reusar el mismo nodo entre intentos: sin esto, tres fallas dejan tres
+        // párrafos apilados empujando la página.
+        var previo = contenedor.parentNode.querySelector('.hilvana-error-pago');
+        if (previo) {
+          previo.textContent = texto;
+          return;
+        }
+
+        var p = document.createElement('p');
+        p.className = 'hilvana-error-pago';
+        p.setAttribute('role', 'alert');
+        p.textContent = texto;
+        p.style.margin = '8px 0 0';
+        p.style.lineHeight = '1.4';
+        // \`currentColor\` y no un rojo fijo: sobre el fondo oscuro de un funnel, un
+        // #b91c1c queda ilegible. Hereda el color del texto de alrededor, que ya
+        // está elegido para contrastar con ese fondo.
+        p.style.color = 'currentColor';
+        p.style.opacity = '0.9';
+        contenedor.parentNode.insertBefore(p, contenedor.nextSibling);
+      } catch (e) {
+        // Si el DOM del funnel no deja insertar, no se rompe el cobro por el aviso.
+        console.log('[hilvana] no se pudo mostrar el error de pago', e);
+      }
+    }
+
     async function montarWallet(contenedor) {
       var slug = contenedor.getAttribute('data-hilvana-wallet');
       if (!slug) return;
@@ -359,6 +411,11 @@ const SCRIPT = `
         // Se pide guardar el método: si el cobro off-session se destraba algún
         // día, el paso siguiente ya queda habilitado sin tocar nada.
         boton.setAttribute('setup-future-usage', 'off_session');
+        // El email de la compra del front. Los wallets lo traen del dispositivo,
+        // pero Whop Pay —el caso de la tarjeta, y el que ve todo browser sin
+        // wallet— lo pediría de nuevo. Es el único campo que quedaría por tipear
+        // en un flujo que se vende como "un toque".
+        if (sesion.email) boton.setAttribute('prefill-email', sesion.email);
 
         boton.addEventListener('express-method-resolved', function (ev) {
           var r = ev && ev.detail ? ev.detail.rendered : null;
@@ -392,7 +449,12 @@ const SCRIPT = `
         });
 
         boton.addEventListener('payment-error', function (ev) {
-          console.log('[hilvana] wallet(' + slug + '): error de pago', ev && ev.detail);
+          var detalle = ev && ev.detail ? ev.detail : {};
+          console.log('[hilvana] wallet(' + slug + '): error de pago', detalle);
+          // Mostrárselo al comprador, no solo a la consola. Un wallet que falla en
+          // silencio deja a alguien mirando un botón que no responde, y lo que hace
+          // es irse — no abrir las devtools.
+          mostrarErrorDePago(contenedor, detalle.message, detalle.code);
         });
 
         contenedor.appendChild(boton);

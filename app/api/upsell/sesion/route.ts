@@ -152,6 +152,14 @@ export async function POST(req: Request): Promise<Response> {
       ok: true,
       sessionId: cfg.id,
       ordenId: orden.id,
+      // El email de la compra del front, para prellenarlo en el diálogo de Whop
+      // Pay. Es el único campo que el comprador tendría que volver a tipear en el
+      // camino que NO es Apple Pay ni Google Pay — los wallets lo traen del
+      // dispositivo, Whop Pay no.
+      //
+      // No es una filtración: para llegar acá hay que presentar el token de la
+      // orden, y ese token ya identifica al comprador. Quien lo tiene es él.
+      email: orden.email ?? null,
     },
     200,
   );
