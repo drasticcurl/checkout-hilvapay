@@ -9,6 +9,12 @@ build/
 .env.local
 .env*.local
 .env.production
+# Copias de seguridad de un .env, que tienen los mismos secretos que el original.
+# `.env*.local` NO las cubre: un `.env.local.bak-20260911131404` no termina en
+# `.local`, así que git lo veía como un archivo cualquiera y lo ofrecía para
+# commitear. Pasó de verdad el 2026-09-11, con una API key de Whop adentro.
+.env*.bak*
+*.env.bak*
 
 # TypeScript
 *.tsbuildinfo
