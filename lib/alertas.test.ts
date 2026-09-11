@@ -1,10 +1,29 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Mockeamos lib/db y lib/telegram ANTES de importar lib/alertas, mismo
+// criterio que email.test.ts: `vigilar()` toca la base (medir, el historial de
+// `alertas`) y la red (mandarAlerta), y el test tiene que poder correr sin
+// Postgres ni Telegram de verdad.
+const qMock = vi.fn();
+const q1Mock = vi.fn();
+vi.mock('./db', () => ({
+  q: (...args: unknown[]) => qMock(...args),
+  q1: (...args: unknown[]) => q1Mock(...args),
+}));
+
+const mandarAlertaMock = vi.fn();
+vi.mock('./telegram', async () => {
+  const real = await vi.importActual<typeof import('./telegram')>('./telegram');
+  return { ...real, mandarAlerta: (...args: unknown[]) => mandarAlertaMock(...args) };
+});
+
 import {
   debeEnviar,
   evaluar,
   formatearMensaje,
   silencioDe,
   UMBRALES,
+  vigilar,
   type Novedad,
   type Sintomas,
 } from './alertas';
@@ -325,5 +344,157 @@ describe('escaparHtml', () => {
 
   it('un texto sin caracteres especiales queda igual', () => {
     expect(escaparHtml('37.00 USD — Acceso Vip')).toBe('37.00 USD — Acceso Vip');
+  });
+});
+
+describe('vigilar', () => {
+  // `medir()` hace, en este orden exacto, 6 llamadas a `q1` (eventos,
+  // cobrosVentana, trabados, cola, eventosError, ultimaHora) y 3 a `q`
+  // (disputas, reembolsos, ventas). Este helper carga las 6 primeras con un
+  // sistema sano y deja las 3 de `q` para quien llame, así cada test solo
+  // arma el síntoma que le importa sin repetir las nueve líneas.
+  function medirSano(): void {
+    q1Mock
+      .mockResolvedValueOnce({ ultimo: null, total: '0' }) // eventos
+      .mockResolvedValueOnce({ total: '0' }) // cobrosVentana
+      .mockResolvedValueOnce({ total: '0', mas_viejo: null }) // trabados
+      .mockResolvedValueOnce({ quemada: '0', atrasada: '0' }) // cola
+      .mockResolvedValueOnce({ total: '0' }) // eventosError
+      .mockResolvedValueOnce({ intentos: '0', pagados: '0' }); // ultimaHora
+  }
+
+  beforeEach(() => {
+    qMock.mockReset();
+    q1Mock.mockReset();
+    mandarAlertaMock.mockReset();
+  });
+
+  it('un sistema sano no llama a mandarAlerta ni escribe en la tabla alertas', async () => {
+    medirSano();
+    qMock.mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([]); // disputas, reembolsos, ventas
+
+    const r = await vigilar(new Date('2026-09-10T20:00:00Z'));
+
+    expect(r).toEqual({ detectadas: 0, mandadas: 0, silenciadas: 0, sinCanal: 0, claves: [] });
+    expect(mandarAlertaMock).not.toHaveBeenCalled();
+  });
+
+  it('SIN CANAL: una alerta detectada que no se pudo mandar queda en sinCanal y NO se registra', async () => {
+    // Este es el caso que reporta el cron real: "detectadas":3,"mandadas":0,
+    // "sinCanal":3. Lo que hay que verificar es que la falta de canal no
+    // pierda la alerta — se vuelve a intentar en la corrida siguiente porque
+    // nunca se escribe en `alertas`.
+    medirSano();
+    qMock
+      .mockResolvedValueOnce([]) // disputas
+      .mockResolvedValueOnce([]) // reembolsos
+      .mockResolvedValueOnce([]) // ventas
+      .mockResolvedValueOnce([]); // select previas de `alertas` (colaQuemada:1 dispara una alerta)
+
+    // Forzamos una sola alerta simple: cola quemada. Se pisa el mock de arriba
+    // con uno que sí tiene colaQuemada > 0.
+    q1Mock.mockReset();
+    q1Mock
+      .mockResolvedValueOnce({ ultimo: null, total: '0' })
+      .mockResolvedValueOnce({ total: '0' })
+      .mockResolvedValueOnce({ total: '0', mas_viejo: null })
+      .mockResolvedValueOnce({ quemada: '1', atrasada: '0' })
+      .mockResolvedValueOnce({ total: '0' })
+      .mockResolvedValueOnce({ intentos: '0', pagados: '0' });
+
+    mandarAlertaMock.mockResolvedValueOnce({
+      intentados: 0,
+      enviados: 0,
+      fallidos: 0,
+      motivo: 'sin_token',
+      detalle: [],
+    });
+
+    const r = await vigilar(new Date('2026-09-10T20:00:00Z'));
+
+    expect(r.detectadas).toBe(1);
+    expect(r.sinCanal).toBe(1);
+    expect(r.mandadas).toBe(0);
+    expect(r.claves).toEqual([]); // no se registró ninguna clave como mandada
+
+    // El INSERT/UPDATE de la tabla `alertas` (el que fija `ultimo_envio_at`)
+    // nunca se llamó: solo se llamó `q` para disputas, reembolsos, ventas y el
+    // select de previas — CERO escrituras.
+    const llamadasDeEscritura = qMock.mock.calls.filter(([sql]) =>
+      String(sql).trim().toLowerCase().startsWith('insert'),
+    );
+    expect(llamadasDeEscritura).toHaveLength(0);
+  });
+
+  it('se vuelve a intentar en la corrida siguiente: sin registro previo, debeEnviar sigue dando true', async () => {
+    // Consecuencia directa del test anterior: como `sinCanal` no escribe en
+    // `alertas`, la siguiente corrida ve `previa = undefined` para esa clave y
+    // `debeEnviar` da `true` de nuevo. Es la prueba de que la alerta no se
+    // pierde: se re-emite hasta que haya canal.
+    expect(debeEnviar(undefined, 'cola_quemada')).toBe(true);
+  });
+
+  it('con canal disponible, la alerta se manda y se registra en la tabla alertas', async () => {
+    medirSano();
+    q1Mock.mockReset();
+    q1Mock
+      .mockResolvedValueOnce({ ultimo: null, total: '0' })
+      .mockResolvedValueOnce({ total: '0' })
+      .mockResolvedValueOnce({ total: '0', mas_viejo: null })
+      .mockResolvedValueOnce({ quemada: '1', atrasada: '0' })
+      .mockResolvedValueOnce({ total: '0' })
+      .mockResolvedValueOnce({ intentos: '0', pagados: '0' });
+
+    qMock
+      .mockResolvedValueOnce([]) // disputas
+      .mockResolvedValueOnce([]) // reembolsos
+      .mockResolvedValueOnce([]) // ventas
+      .mockResolvedValueOnce([]) // select previas de `alertas`
+      .mockResolvedValueOnce([]); // el insert/upsert en `alertas`
+
+    mandarAlertaMock.mockResolvedValueOnce({
+      intentados: 1,
+      enviados: 1,
+      fallidos: 0,
+      detalle: [{ chatId: '999', ok: true }],
+    });
+
+    const r = await vigilar(new Date('2026-09-10T20:00:00Z'));
+
+    expect(r.mandadas).toBe(1);
+    expect(r.sinCanal).toBe(0);
+    expect(r.claves).toEqual(['cola_quemada']);
+
+    const insert = qMock.mock.calls.find(([sql]) => String(sql).trim().toLowerCase().startsWith('insert'));
+    expect(insert).toBeDefined();
+  });
+
+  it('una alerta silenciada (dentro de su ventana) no llama a mandarAlerta', async () => {
+    medirSano();
+    q1Mock.mockReset();
+    q1Mock
+      .mockResolvedValueOnce({ ultimo: null, total: '0' })
+      .mockResolvedValueOnce({ total: '0' })
+      .mockResolvedValueOnce({ total: '0', mas_viejo: null })
+      .mockResolvedValueOnce({ quemada: '1', atrasada: '0' })
+      .mockResolvedValueOnce({ total: '0' })
+      .mockResolvedValueOnce({ intentos: '0', pagados: '0' });
+
+    const ahora = new Date('2026-09-10T20:00:00Z');
+    const haceUnaHora = new Date(ahora.getTime() - 60 * 60_000);
+
+    qMock
+      .mockResolvedValueOnce([]) // disputas
+      .mockResolvedValueOnce([]) // reembolsos
+      .mockResolvedValueOnce([]) // ventas
+      // previa: cola_quemada ya se mandó hace 1h, y su ventana es 12h -> silenciada
+      .mockResolvedValueOnce([{ clave: 'cola_quemada', ultimo_envio_at: haceUnaHora, veces: 1 }]);
+
+    const r = await vigilar(ahora);
+
+    expect(r.detectadas).toBe(1);
+    expect(r.silenciadas).toBe(1);
+    expect(r.mandadas).toBe(0);
+    expect(mandarAlertaMock).not.toHaveBeenCalled();
   });
 });

@@ -23,6 +23,8 @@ import {
   Tr,
 } from '../../../../components/panel/ui';
 import { BotonProbar } from './BotonProbar';
+import { ConfiguracionFaltante } from './ConfiguracionFaltante';
+import { DiagnosticoBot } from './DiagnosticoBot';
 import { EliminarDestinatarioButton } from './EliminarDestinatarioButton';
 import { FormularioDestinatario } from './FormularioDestinatario';
 import { SwitchDestinatario } from './SwitchDestinatario';
@@ -63,6 +65,7 @@ export default async function AlertasPage(): Promise<JSX.Element> {
   const hayToken = Boolean(process.env.TELEGRAM_BOT_TOKEN?.trim());
   const hayAdmin = Boolean(process.env.TELEGRAM_CHAT_ID_ADMIN?.trim());
   const hayCodigo = Boolean(process.env.TELEGRAM_CODIGO_REGISTRO?.trim());
+  const hayWebhookSecret = Boolean(process.env.TELEGRAM_WEBHOOK_SECRET?.trim());
   const activos = destinatarios.filter((d) => d.activo).length;
   const bloqueados = destinatarios.filter((d) => !d.activo && d.ultimo_error?.startsWith('403')).length;
 
@@ -78,19 +81,15 @@ export default async function AlertasPage(): Promise<JSX.Element> {
         acciones={<BotonProbar />}
       />
 
-      {!hayToken ? (
-        <Aviso tono="alerta" icono={<Warning size={16} aria-hidden="true" />} titulo="Falta el bot">
-          Sin <span className="font-mono">TELEGRAM_BOT_TOKEN</span> nadie recibe nada: el vigilante detecta
-          los problemas, los anota en el log y no los puede avisar. Creá el bot con @BotFather, cargá el
-          token en el entorno del proceso y recargá PM2.
-        </Aviso>
-      ) : !hayAdmin && activos === 0 ? (
-        <Aviso tono="alerta" icono={<Warning size={16} aria-hidden="true" />} titulo="Nadie está recibiendo">
-          Hay bot pero ningún destinatario activo, y{' '}
-          <span className="font-mono">TELEGRAM_CHAT_ID_ADMIN</span> está vacía. Las alertas se van a
-          detectar y no se van a poder avisar.
-        </Aviso>
-      ) : null}
+      <ConfiguracionFaltante
+        hayToken={hayToken}
+        hayAdmin={hayAdmin}
+        hayCodigo={hayCodigo}
+        hayWebhookSecret={hayWebhookSecret}
+        hayDestinatarios={activos > 0}
+      />
+
+      {hayToken ? <DiagnosticoBot /> : null}
 
       {bloqueados > 0 ? (
         <Aviso tono="alerta" icono={<Warning size={16} aria-hidden="true" />}>

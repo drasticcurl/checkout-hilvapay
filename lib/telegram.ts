@@ -224,3 +224,174 @@ export async function mandarAlerta(
     detalle,
   };
 }
+
+// ── Diagnóstico del bot ──────────────────────────────────────────────────────
+//
+// Esto no lo llama el vigilante ni ningún cron: es para que una persona mirando
+// /admin/alertas pueda contestar "¿el token es válido? ¿el webhook está
+// registrado y apunta adonde tiene que apuntar?" sin salir del panel ni pegarle
+// a `api.telegram.org` a mano desde una terminal.
+
+export type EstadoBot =
+  | { configurado: false }
+  | {
+      configurado: true;
+      tokenValido: true;
+      bot: { id: number; username: string | null; nombre: string };
+    }
+  | {
+      configurado: true;
+      tokenValido: false;
+      error: string;
+    };
+
+/** Lo que importa de `getWebhookInfo`, recortado a lo que el panel necesita mostrar. */
+export type EstadoWebhook =
+  | { consultado: false }
+  | {
+      consultado: true;
+      ok: true;
+      url: string;
+      /** Si hay una URL registrada pero no es la esperada (dominio viejo, http en vez de https). */
+      coincideConEsperada: boolean | null;
+      pendientes: number;
+      ultimoError: string | null;
+      ultimoErrorFecha: string | null;
+    }
+  | {
+      consultado: true;
+      ok: false;
+      error: string;
+    };
+
+export type DiagnosticoBot = {
+  bot: EstadoBot;
+  webhook: EstadoWebhook;
+};
+
+/**
+ * `getMe`: si el token es válido y, de yapa, con qué username. Es el primer
+ * chequeo porque si esto falla no tiene sentido preguntar por el webhook — un
+ * token inválido no tiene ningún webhook "suyo" que consultar.
+ *
+ * Nunca tira: devuelve el motivo en el propio tipo, para que la ruta que llama
+ * a esto no necesite un try/catch alrededor.
+ */
+export async function consultarBot(): Promise<EstadoBot> {
+  const t = token();
+  if (!t) return { configurado: false };
+
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${t}/getMe`, {
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      cache: 'no-store',
+    });
+    const data = (await res.json().catch(() => null)) as {
+      ok?: boolean;
+      description?: string;
+      result?: { id: number; username?: string; first_name?: string };
+    } | null;
+
+    if (!res.ok || !data?.ok || !data.result) {
+      // Telegram devuelve 401 con un `description` legible ("Unauthorized") para
+      // un token inválido o revocado. Se recorta igual que en `mandarA`.
+      const motivo = data?.description ?? `${res.status}`;
+      return { configurado: true, tokenValido: false, error: motivo.slice(0, 200) };
+    }
+
+    return {
+      configurado: true,
+      tokenValido: true,
+      bot: {
+        id: data.result.id,
+        username: data.result.username ?? null,
+        nombre: data.result.first_name ?? 'sin nombre',
+      },
+    };
+  } catch (err) {
+    const motivo = err instanceof Error ? err.message : String(err);
+    return { configurado: true, tokenValido: false, error: `red: ${motivo}` };
+  }
+}
+
+/**
+ * Compara la URL que Telegram tiene registrada contra la que este servicio
+ * espera. `null` cuando no hay ninguna esperada configurada (no se puede saber
+ * si "coincide" con nada) — así el llamador no confunde "no coincide" con "no se
+ * pudo verificar".
+ *
+ * Pura, para poder probarla sin red: la exporta el módulo pero no depende de
+ * nada que no sean sus dos strings.
+ */
+export function coincideWebhook(urlRegistrada: string, urlEsperada: string | null): boolean | null {
+  if (!urlEsperada) return null;
+  // Sin barra final y sin mayúsculas/minúsculas: Telegram devuelve la URL tal
+  // cual se registró, y una barra de más no es una configuración distinta.
+  const normalizar = (u: string) => u.trim().toLowerCase().replace(/\/+$/, '');
+  return normalizar(urlRegistrada) === normalizar(urlEsperada);
+}
+
+/**
+ * `getWebhookInfo`: si Telegram tiene un webhook registrado, a qué URL, y si
+ * viene fallando. `pending_update_count > 0` con `last_error_message` presente
+ * es la firma de "el endpoint está devolviendo error y Telegram sigue
+ * reintentando" — la misma clase de problema que resuelve `payment.created`
+ * para Whop, pero del lado de Telegram.
+ *
+ * La URL esperada es `NEXT_PUBLIC_BASE_URL` + `/api/telegram/webhook`, la misma
+ * que documenta el README. No hace falta un env var nuevo para esto.
+ */
+export async function consultarWebhook(): Promise<EstadoWebhook> {
+  const t = token();
+  if (!t) return { consultado: false };
+
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${t}/getWebhookInfo`, {
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      cache: 'no-store',
+    });
+    const data = (await res.json().catch(() => null)) as {
+      ok?: boolean;
+      description?: string;
+      result?: {
+        url?: string;
+        pending_update_count?: number;
+        last_error_message?: string;
+        last_error_date?: number;
+      };
+    } | null;
+
+    if (!res.ok || !data?.ok || !data.result) {
+      const motivo = data?.description ?? `${res.status}`;
+      return { consultado: true, ok: false, error: motivo.slice(0, 200) };
+    }
+
+    const base = process.env.NEXT_PUBLIC_BASE_URL?.trim() || null;
+    const esperada = base ? `${base.replace(/\/+$/, '')}/api/telegram/webhook` : null;
+    const url = data.result.url ?? '';
+
+    return {
+      consultado: true,
+      ok: true,
+      url,
+      coincideConEsperada: url ? coincideWebhook(url, esperada) : null,
+      pendientes: data.result.pending_update_count ?? 0,
+      ultimoError: data.result.last_error_message ?? null,
+      ultimoErrorFecha: data.result.last_error_date
+        ? new Date(data.result.last_error_date * 1000).toISOString()
+        : null,
+    };
+  } catch (err) {
+    const motivo = err instanceof Error ? err.message : String(err);
+    return { consultado: true, ok: false, error: `red: ${motivo}` };
+  }
+}
+
+/**
+ * Los dos chequeos juntos, en paralelo. Es lo único que llama la ruta del panel:
+ * así esa ruta no decide el orden ni tiene que acordarse de pedir los dos.
+ */
+export async function diagnosticarBot(): Promise<DiagnosticoBot> {
+  const [bot, webhook] = await Promise.all([consultarBot(), consultarWebhook()]);
+  return { bot, webhook };
+}

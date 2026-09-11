@@ -6,6 +6,7 @@ import {
   BellRinging,
   ChartLineUp,
   Fingerprint,
+  GraduationCap,
   LinkSimple,
   Package,
   Receipt,
@@ -20,10 +21,11 @@ import { unir } from './ui';
  * ítems en UNA línea. Un nav de dos líneas en desktop es un nav roto.
  *
  * **El umbral de la barra en una línea es `xl` (1280px) y antes era `lg`.** Con
- * seis ítems entraban a 1024px; con ocho no. Medido sobre el header real: la fila
- * tiene la marca (~130px) y el bloque de entorno + cerrar sesión (~200px), así
- * que a 1024px le quedan ~646px al nav y los ocho ítems piden ~750px. A 1280px el
- * contenedor llega a su techo (`max-w-panel`, 76rem) y sobra lugar.
+ * seis ítems entraban a 1024px; con ocho no, y con los nueve actuales (se sumó
+ * "Tutorial") tampoco. Medido sobre el header real: la fila tiene la marca
+ * (~130px) y el bloque de entorno + cerrar sesión (~200px), así que a 1024px le
+ * quedan ~646px al nav y ocho ítems ya pedían ~750px. A 1280px el contenedor
+ * llega a su techo (`max-w-panel`, 76rem) y sigue sobrando lugar con el noveno.
  *
  * La alternativa era esconder las etiquetas y dejar solo iconos entre 1024 y
  * 1280. Ocho iconos abstractos sin palabras se adivinan peor que la fila con
@@ -33,6 +35,10 @@ import { unir } from './ui';
  * / rechazó), y el embudo dibuja justamente lo contrario, un camino que se cierra.
  */
 const SECCIONES = [
+  // Primer ítem a propósito: es el punto de entrada de alguien que deployó esto
+  // recién y no sabe por dónde empezar. El resto de las secciones asume que ya
+  // sabés qué es un funnel o un origen; esta no.
+  { href: '/admin/tutorial', label: 'Tutorial', Icono: GraduationCap },
   { href: '/admin', label: 'Links', Icono: LinkSimple },
   { href: '/admin/funnels', label: 'Funnels', Icono: TreeStructure },
   { href: '/admin/catalogo', label: 'Catálogo', Icono: Storefront },

@@ -26,6 +26,7 @@ import { NextResponse } from 'next/server';
 import { headersCors } from '@/lib/cors';
 import { resolverToken } from '@/lib/token';
 import { q, q1 } from '@/lib/db';
+import { crearLimitador, ipDelRequest } from '@/lib/rate-limit';
 import { resolverSiguienteUrl, resultadoDeEstado } from '@/lib/funnels';
 import { aplicarEstadoDePago, buscarCobro } from '@/lib/cobros';
 import { esFinal, mensajeParaComprador, clasificarDecline } from '@/lib/estado-pago';
@@ -34,6 +35,21 @@ import type { Cobro, RespuestaCobro } from '@/lib/tipos';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/**
+ * Rate limit por IP. Detectado como faltante en la auditoría del 2026-09-11: el
+ * endpoint que COBRA era el único endpoint público sin ninguno, mientras
+ * `/api/checkout/sesion` ya tenía el suyo.
+ *
+ * 10 por minuto y no 20 como el checkout: acá cada llamada que pasa las cuatro
+ * guardas sale a la API de Whop. Un comprador legítimo aprieta el botón una vez,
+ * dos si duda; diez ya es un bucle.
+ *
+ * Lo que esto frena es el bucle y el sondeo, no el doble cobro — de eso se ocupa
+ * el índice único `(orden_id, pagina_id)` del paso 5, que es la única garantía
+ * real y sigue estando. Ver `lib/rate-limit.ts` para qué NO cubre.
+ */
+const limitador = crearLimitador(10);
 
 /** La página de pago con su producto ya resuelto, lo mínimo que necesita este endpoint. */
 type PaginaCobro = {
@@ -44,6 +60,10 @@ type PaginaCobro = {
   url_rechazo: string | null;
   producto_id: string;
   whop_plan_id: string;
+  /** El funnel de este paso. NULL en las páginas sueltas de antes de la migración 003. */
+  funnel_id: string | null;
+  /** El funnel de la orden, resuelto por la página del front que la originó. */
+  funnel_de_la_orden: string | null;
 };
 
 export async function OPTIONS(req: Request): Promise<Response> {
@@ -71,6 +91,21 @@ export async function POST(req: Request): Promise<Response> {
   // A partir de acá toda respuesta lleva los headers de CORS resueltos, así
   // que definimos un helper local para no repetirlos en cada return.
   const json = (body: unknown, status: number) => NextResponse.json(body, { status, headers: cors });
+
+  // ── 1b. Rate limit ──────────────────────────────────────────────────────
+  // Después del CORS y ANTES de tocar la base o Whop. El orden importa: un
+  // request de un origen no autorizado ya se fue en 403 sin gastar una entrada
+  // del contador, así que nadie puede llenar el Map desde afuera de la
+  // allowlist. Y ningún request limitado llega a hacer un SELECT.
+  //
+  // 429 con los headers de CORS puestos: el loader tiene que poder LEER esta
+  // respuesta para no dejar el botón deshabilitado para siempre. Sin los
+  // headers, el navegador le esconde el status y el `catch` del script no
+  // distingue "te frené" de "se cayó la red".
+  if (limitador.excede(ipDelRequest(req))) {
+    console.warn(`[upsell/cobrar] rate limit excedido para ${ipDelRequest(req)}`);
+    return json({ error: 'demasiados_intentos' }, 429);
+  }
 
   let payload: unknown;
   try {
@@ -103,6 +138,11 @@ export async function POST(req: Request): Promise<Response> {
   const pagina = await q1<PaginaCobro>(
     `select pg.id, pg.tipo, pg.url_exito, pg.url_rechazo,
             pg.producto_id, pr.whop_plan_id,
+            pg.funnel_id,
+            -- El funnel al que pertenece la orden, resuelto por la página del
+            -- front que la originó. Va como subselect y no como una segunda
+            -- query para no agregar un round-trip al camino del cobro.
+            (select funnel_id from paginas where id = $2) as funnel_de_la_orden,
             -- activo efectivo, no el de la fila: incluye el switch del funnel.
             (pg.activo and (pg.funnel_id is null or f.activo)) as activo
        from paginas pg
@@ -118,7 +158,7 @@ export async function POST(req: Request): Promise<Response> {
       -- El left join y no un join interno: una página suelta (sin funnel_id) tiene que
       -- seguir funcionando, y con un join interno desaparecería.
       where pg.slug = $1`,
-    [slug],
+    [slug, orden.pagina_id],
   );
 
   if (!pagina) {
@@ -132,6 +172,31 @@ export async function POST(req: Request): Promise<Response> {
   }
   if (!pagina.activo) {
     return json({ error: 'pagina_inactiva' }, 404);
+  }
+
+  // ── 3b. El paso tiene que ser DE ESTE funnel ────────────────────────────
+  // El comentario de `ordenes.token` en 001_init.sql dice que el token queda
+  // "limitado a las páginas del funnel". La auditoría del 2026-09-11 encontró
+  // que eso no se aplicaba en ninguna parte: con un token válido se podía cobrar
+  // CUALQUIER paso upsell activo del sistema, incluido el de otro funnel y otro
+  // producto. El daño estaba acotado por el índice único `(orden_id, pagina_id)`
+  // —un cobro por paso ajeno, no infinitos— pero es más superficie de la que el
+  // esquema promete, y le cobraría a alguien un producto que nunca vio.
+  //
+  // Se compara el funnel de la página del upsell contra el de la página del
+  // front que originó la orden. Los dos NULL se acepta a propósito: son las
+  // páginas sueltas de antes de la migración 003, que el README documenta como
+  // todavía soportadas. Lo que no se acepta es el cruce — una suelta contra una
+  // de funnel, o dos funnels distintos.
+  if (pagina.funnel_id !== pagina.funnel_de_la_orden) {
+    console.warn(
+      `[upsell/cobrar] orden ${orden.id}: el paso ${slug} es del funnel ` +
+        `${pagina.funnel_id ?? 'null'} y la orden es del ${pagina.funnel_de_la_orden ?? 'null'} → 404`,
+    );
+    // 404 y no 403: un 403 le confirmaría a quien prueba tokens que ese slug
+    // existe y está activo, y lo mandaría a buscar de qué funnel es. Un 404 se
+    // ve igual que un slug inventado.
+    return json({ error: 'pagina_inexistente' }, 404);
   }
 
   // ── 4. Método guardado ──────────────────────────────────────────────────
