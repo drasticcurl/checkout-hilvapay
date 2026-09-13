@@ -17,8 +17,8 @@ export type { Cobro, Orden };
 /** Las columnas de `ordenes` que este módulo devuelve. Una sola definición: si */
 /** cada query listara las suyas, agregar una columna obligaría a tocar cuatro. */
 const COLS_ORDEN = `id, pagina_id, email, nombre, token, token_expira_at, whop_member_id,
-       whop_payment_method_id, whop_user_id, whop_checkout_config_id, metodo_guardado,
-       session_id, visitor_id, utms, created_at, updated_at`;
+       whop_payment_method_id, whop_user_id, whop_checkout_config_id, whop_payment_method_type,
+       metodo_guardado, session_id, visitor_id, utms, created_at, updated_at`;
 
 const COLS_COBRO = `id, orden_id, pagina_id, producto_id, whop_plan_id, whop_payment_id, status,
        decline_code, failure_message, idempotency_key, monto, moneda, origen,
@@ -125,7 +125,20 @@ export async function aplicarEstadoDePago(
  */
 export async function guardarMetodoDePago(
   ordenId: string,
-  datos: { memberId?: string | null; paymentMethodId?: string | null; userId?: string | null; email?: string | null },
+  datos: {
+    memberId?: string | null;
+    paymentMethodId?: string | null;
+    userId?: string | null;
+    email?: string | null;
+    /**
+     * El `payment_method_type` de Whop (`card`, `apple_pay`, `google_pay`,
+     * ...). Decide qué botón muestra el upsell: `data-hilvana-upsell` (cobro
+     * silencioso) para tarjeta, el wallet nativo para Apple Pay/Google Pay —
+     * ver `app/loader.js/route.ts` y la migración 009. `null`/desconocido cae
+     * al camino de tarjeta, que es el más restrictivo.
+     */
+    paymentMethodType?: string | null;
+  },
 ): Promise<void> {
   await q(
     `update ordenes
@@ -133,10 +146,18 @@ export async function guardarMetodoDePago(
             whop_payment_method_id = coalesce(whop_payment_method_id, $2),
             whop_user_id = coalesce(whop_user_id, $3),
             email = coalesce(email, $4),
+            whop_payment_method_type = coalesce(whop_payment_method_type, $5),
             metodo_guardado = metodo_guardado or ($2 is not null),
             updated_at = now()
-      where id = $5`,
-    [datos.memberId ?? null, datos.paymentMethodId ?? null, datos.userId ?? null, datos.email ?? null, ordenId],
+      where id = $6`,
+    [
+      datos.memberId ?? null,
+      datos.paymentMethodId ?? null,
+      datos.userId ?? null,
+      datos.email ?? null,
+      datos.paymentMethodType ?? null,
+      ordenId,
+    ],
   );
 }
 

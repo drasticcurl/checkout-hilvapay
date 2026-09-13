@@ -184,6 +184,7 @@ export async function POST(req: Request): Promise<Response> {
     paymentMethodId: pago.payment_method?.id,
     userId: pago.user?.id,
     email: pago.user?.email,
+    paymentMethodType: pago.payment_method?.payment_method_type,
   });
 
   if (cambio && status === 'pagado') {

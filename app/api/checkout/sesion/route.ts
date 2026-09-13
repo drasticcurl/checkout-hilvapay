@@ -153,8 +153,8 @@ export async function POST(req: Request): Promise<Response> {
   if (body.ordenIdRecuperacion) {
     const orden = await q1<Orden>(
       `select id, pagina_id, email, nombre, token, token_expira_at, whop_member_id,
-              whop_payment_method_id, whop_user_id, whop_checkout_config_id, metodo_guardado,
-              session_id, visitor_id, utms, created_at, updated_at
+              whop_payment_method_id, whop_user_id, whop_checkout_config_id, whop_payment_method_type,
+              metodo_guardado, session_id, visitor_id, utms, created_at, updated_at
          from ordenes where id = $1`,
       [body.ordenIdRecuperacion],
     );

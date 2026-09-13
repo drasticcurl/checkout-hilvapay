@@ -1,0 +1,36 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 009 — El método de pago del front, para elegir el botón del upsell sin
+--        intentar primero un cobro que ya se sabe que va a fallar
+--
+-- ── El problema que resuelve ─────────────────────────────────────────────────
+-- El cobro silencioso del upsell (`data-hilvana-upsell`, `POST /api/upsell/cobrar`)
+-- cobra off-session contra `whop_payment_method_id`. Eso funciona cuando el front
+-- se pagó con tarjeta tipeada, y NO funciona cuando se pagó con Apple Pay o Google
+-- Pay: un token de wallet es un DPAN atado al dispositivo, sin fingerprint ni
+-- expiración, y por diseño de la red exige autenticación biométrica en cada
+-- transacción — nunca solo el titular ausente.
+--
+-- Hasta ahora el loader no lo sabía de antemano: intentaba el cobro silencioso
+-- igual, esperaba el 400/`requiere_tarjeta`, y RECIÉN AHÍ mostraba el diálogo de
+-- Whop Pay como fallback. Funciona, pero le agrega a quien pagó con wallet un
+-- intento fallido y ~1 segundo de espera para terminar en el mismo lugar al que
+-- se podría haber ido directo.
+--
+-- Con esta columna, el loader elige el camino correcto DESDE EL PRIMER CLICK del
+-- botón del upsell: cobro silencioso si fue tarjeta, wallet nativo si fue Apple
+-- Pay/Google Pay — en los dos casos, un solo toque.
+--
+-- ── Por qué texto libre y no un enum ─────────────────────────────────────────
+-- Whop devuelve decenas de `payment_method_type` posibles (`card`, `apple_pay`,
+-- `google_pay`, `klarna`, `paypal`, ...). Un CHECK cerrado a los dos que importan
+-- hoy se rompería en el primer valor nuevo que Whop agregue; NULL/desconocido cae
+-- al camino de tarjeta por default (ver el código que la usa), que es el más
+-- restrictivo y el que ya se prueba end-to-end.
+--
+-- ── Aditiva ───────────────────────────────────────────────────────────────────
+-- NULL para toda orden existente: no rompe nada, y el código la trata igual que
+-- "no se sabe" → camino de tarjeta, el comportamiento de antes de esta migración.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+alter table ordenes
+  add column if not exists whop_payment_method_type text;

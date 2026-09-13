@@ -81,6 +81,7 @@ function baseOrden(overrides: Partial<Orden> = {}): Orden {
     whop_payment_method_id: 'payt_1',
     whop_user_id: 'user_1',
     whop_checkout_config_id: 'ch_1',
+    whop_payment_method_type: null,
     metodo_guardado: true,
     session_id: UUID_SESSION,
     visitor_id: UUID_VISITOR,

@@ -233,8 +233,16 @@ const SCRIPT = `
      * nada más. Si no, el botón está ahí con el mensaje al lado y toca una vez más
      * — un toque extra, en la misma página, en vez de un redirect.
      */
-    async function abrirWhopPay(slug, contenedorRef) {
-      var sesion = await pedirSesion(slug);
+    async function abrirWhopPay(slug, contenedorRef, sesionPrecargada) {
+      // Si ya se resolvió antes del click (ver precargarSesionesDeLaPagina),
+      // se usa esa: cero await entre el gesto del comprador y el intento de
+      // abrir el diálogo — la única ventana en la que el navegador acepta
+      // abrir la hoja de wallet sin que sea el usuario quien la dispare.
+      // Si no vino, se pide en el momento (comportamiento de siempre: el
+      // camino sin_metodo_guardado ya rompió la cadena de gesto un paso
+      // antes con el await cobrar(slug), así que acá no cambia nada perderla
+      // de nuevo).
+      var sesion = sesionPrecargada || (await pedirSesion(slug));
       if (!sesion || !sesion.sessionId) {
         console.log('[hilvana] whop-pay(' + slug + '): sin sesión', sesion);
         return false;
@@ -332,6 +340,42 @@ const SCRIPT = `
       if (boton && boton.setAttribute && !boton.hasAttribute('data-hilvana-texto-original')) {
         boton.setAttribute('data-hilvana-texto-original', boton.textContent || '');
       }
+
+      // ── Wallet directo, sin pasar por el cobro silencioso ────────────────
+      //
+      // Si el FRONT se pagó con Apple Pay o Google Pay, el método guardado es
+      // un DPAN atado al dispositivo: por diseño de la red, exige
+      // autenticación biométrica en cada cobro, así que un intento
+      // off-session (data-hilvana-upsell normal) va a fallar siempre — no es
+      // una posibilidad, es la garantía documentada del propio wallet.
+      //
+      // En vez de intentarlo igual y esperar el fallo para recién ahí mostrar
+      // Whop Pay (lo que hacía este mismo botón hasta ahora), se va DIRECTO
+      // al wallet si sesionCacheada ya sabe que el front fue wallet — la
+      // sesión, precargada al entrar a la página, ya está resuelta en
+      // memoria, así que no hay ningún await entre este click y el intento de
+      // abrir la hoja: es la misma ventana de gesto que usa el botón de
+      // wallet de la pantalla de recuperación.
+      var sesionPromesa = sesionesPorSlug[slug];
+      if (sesionPromesa) {
+        var sesionYaResuelta = null;
+        // No se espera la promesa acá (eso sería un await, y rompería la
+        // cadena de gesto): se lee su valor SOLO si ya se resolvió antes de
+        // este click, que es el caso normal porque se precargó al cargar la
+        // página, con tiempo de sobra antes de que el comprador llegue a
+        // tocar el botón.
+        if (typeof sesionPromesa.hilvanaResuelta !== 'undefined') {
+          sesionYaResuelta = sesionPromesa.hilvanaResuelta;
+        }
+        if (sesionYaResuelta && sesionYaResuelta.metodoFront === 'apple_pay' || sesionYaResuelta && sesionYaResuelta.metodoFront === 'google_pay') {
+          deshabilitar(boton, 'Procesando...');
+          if (await abrirWhopPay(slug, boton, sesionYaResuelta)) { ocultar(boton); cobroEnCurso = false; return; }
+          // No se pudo montar el wallet (script de Whop no cargó, sesión sin
+          // sessionId, etc.): se sigue con el camino normal de abajo, que
+          // reintenta pedir la sesión y en última instancia redirige.
+        }
+      }
+
       deshabilitar(boton, 'Procesando...');
 
       try {
@@ -473,6 +517,55 @@ const SCRIPT = `
         body: JSON.stringify({ token: token(), slug: slug }),
       });
       return await resp.json().catch(function () { return {}; });
+    }
+
+    // ── Caché de la sesión + el método del front, por slug ──────────────────
+    //
+    // "pedirSesion" crea una checkout configuration en Whop cada vez que se
+    // llama: pedirla en el CLICK de aceptarUpsell (como se hacía) funciona,
+    // pero le agrega al comprador un round-trip antes de saber qué botón
+    // mostrarle — y si el front se pagó con wallet, ESE round-trip es
+    // exactamente lo que rompe la cadena de gesto de usuario que el navegador
+    // exige para abrir la hoja de Apple Pay/Google Pay (solo se puede abrir
+    // como reacción DIRECTA a un click, sin ningún await en el medio).
+    //
+    // Por eso se precarga al cargar la página (precargarSesionUpsell, más
+    // abajo), antes de que exista ningún click: cuando el comprador toca el
+    // botón, aceptarUpsell ya tiene la sesión Y el metodoFront resueltos en
+    // memoria, y puede decidir la rama sin ningún await previo.
+    var sesionesPorSlug = {};
+
+    async function sesionCacheada(slug) {
+      if (sesionesPorSlug[slug]) return sesionesPorSlug[slug];
+      var promesa = pedirSesion(slug).then(function (sesion) {
+        // Se cuelga el resultado directo de la promesa (no es una API
+        // estándar de Promise, es una propiedad propia) para que
+        // aceptarUpsell pueda leerlo SIN await cuando ya se resolvió: es lo
+        // que le permite decidir la rama de wallet dentro del mismo gesto de
+        // click, sin esperar de nuevo a este fetch.
+        promesa.hilvanaResuelta = sesion;
+        return sesion;
+      });
+      sesionesPorSlug[slug] = promesa;
+      return promesa;
+    }
+
+    /**
+     * Precarga la sesión de todos los botones data-hilvana-upsell de la
+     * página, apenas carga el script — no espera al click. Idempotente
+     * (sesionCacheada no repite el fetch por slug), así que se puede llamar
+     * de más sin costo. Si falla, aceptarUpsell simplemente vuelve a pedirla
+     * en el momento del click (con el costo de latencia de siempre, pero sin
+     * romper nada).
+     */
+    function precargarSesionesDeLaPagina() {
+      try {
+        var nodos = document.querySelectorAll('[data-hilvana-upsell]');
+        for (var i = 0; i < nodos.length; i++) {
+          var slug = nodos[i].getAttribute('data-hilvana-upsell');
+          if (slug) void sesionCacheada(slug).catch(function () {});
+        }
+      } catch (e) {}
     }
 
     async function confirmar(slug, receiptId) {
@@ -678,6 +771,9 @@ const SCRIPT = `
     // script, sin esperar al primer click.
     token();
     enganchar();
+    // Sin token no hay orden que consultar — no tiene sentido pedir la sesión
+    // de un upsell para un comprador que llegó sin haber pagado el front.
+    if (token()) precargarSesionesDeLaPagina();
 
     // Los wallets se montan cuando el DOM está listo: el bloque de oferta de un
     // funnel con VSL suele aparecer más tarde, así que además se reintenta en
@@ -688,12 +784,15 @@ const SCRIPT = `
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', montarTodosLosWallets);
         document.addEventListener('DOMContentLoaded', aplicarDelays);
+        if (token()) document.addEventListener('DOMContentLoaded', precargarSesionesDeLaPagina);
       } else {
         montarTodosLosWallets();
         aplicarDelays();
+        if (token()) precargarSesionesDeLaPagina();
       }
       window.addEventListener('load', montarTodosLosWallets);
       window.addEventListener('load', aplicarDelays);
+      if (token()) window.addEventListener('load', precargarSesionesDeLaPagina);
     } catch (e) {}
 
     window.hilvana = {
@@ -713,6 +812,15 @@ const SCRIPT = `
        * data-hilvana-delay-armado la primera vez que lo procesa).
        */
       aplicarDelays: aplicarDelays,
+      /**
+       * Igual idea, para data-hilvana-upsell: si el botón del upsell se
+       * inserta DESPUÉS de que este script corrió, llamala una vez insertado
+       * — sin esto, ese botón no tiene la sesión precargada y aceptarUpsell
+       * cae al camino normal (pide la sesión en el momento, con el costo de
+       * latencia de siempre, pero sin romper nada). Es idempotente
+       * (sesionCacheada no repite el fetch por slug).
+       */
+      precargarSesionesDeUpsell: precargarSesionesDeLaPagina,
     };
   } catch (e) {
     // Ni esto puede tirar hacia afuera. Si algo de lo de arriba falló de una

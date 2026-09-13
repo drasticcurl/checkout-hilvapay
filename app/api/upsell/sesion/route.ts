@@ -160,6 +160,12 @@ export async function POST(req: Request): Promise<Response> {
       // No es una filtración: para llegar acá hay que presentar el token de la
       // orden, y ese token ya identifica al comprador. Quien lo tiene es él.
       email: orden.email ?? null,
+      // Con qué se pagó el FRONT (no esta sesión, que todavía no cobró nada):
+      // decide si el botón del upsell arranca directo por el wallet nativo
+      // (Apple Pay/Google Pay, que no soportan cobro off-session por diseño de
+      // la red) o intenta primero el cobro silencioso (tarjeta). Ver migración
+      // 009 y `aceptarUpsell` en este mismo script.
+      metodoFront: orden.whop_payment_method_type ?? null,
     },
     200,
   );

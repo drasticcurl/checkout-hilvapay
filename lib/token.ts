@@ -51,8 +51,8 @@ export async function resolverToken(
   // comparar carácter por carácter, solo hay o no hay una fila con esa clave.
   const orden = await q1<Orden>(
     `select id, pagina_id, email, nombre, token, token_expira_at, whop_member_id,
-            whop_payment_method_id, whop_user_id, whop_checkout_config_id, metodo_guardado,
-            session_id, visitor_id, utms, created_at, updated_at
+            whop_payment_method_id, whop_user_id, whop_checkout_config_id, whop_payment_method_type,
+            metodo_guardado, session_id, visitor_id, utms, created_at, updated_at
        from ordenes
       where token = $1`,
     [token],

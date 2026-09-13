@@ -111,6 +111,13 @@ export type Orden = {
   whop_payment_method_id: string | null;
   whop_user_id: string | null;
   whop_checkout_config_id: string | null;
+  /**
+   * `payment_method_type` de Whop en el pago del front (`card`, `apple_pay`,
+   * `google_pay`, ...). `null` = todavía no se sabe (webhook/claim no
+   * llegaron) o el pago no guardó método. Decide qué botón muestra el upsell
+   * — ver `guardarMetodoDePago` en `lib/cobros.ts`.
+   */
+  whop_payment_method_type: string | null;
   /** false = pagó con un método no guardable. Esa persona no tiene one-click. */
   metodo_guardado: boolean;
   /** Atribución que llega del funnel. `null` si no vino o no era un UUID. */

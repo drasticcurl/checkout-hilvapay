@@ -207,6 +207,7 @@ async function manejarPago(evento: EventoWhop): Promise<void> {
     paymentMethodId: pago.payment_method?.id,
     userId: pago.user?.id,
     email: pago.user?.email,
+    paymentMethodType: pago.payment_method?.payment_method_type,
   });
 
   const cobro = await registrarCobroDelFront(orden, pago);
