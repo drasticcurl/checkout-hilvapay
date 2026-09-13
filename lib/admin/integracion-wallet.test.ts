@@ -25,6 +25,7 @@ describe('snippetWalletHtml / snippetWalletJsx', () => {
     url_externa: 'https://elfunnel.com/upsell1',
     permite_rechazo: false,
     producto: { nombre: 'Extra', precio: '19.90', moneda: 'usd' },
+    delay_segundos: null,
   };
 
   // Un div vacío y NO un <button>: el loader le inyecta adentro el custom element
@@ -59,6 +60,7 @@ describe('integracionDeFunnel con wallet', () => {
     url_externa: null,
     permite_rechazo: false,
     producto: { nombre: 'Front', precio: '1.00', moneda: 'usd' },
+    delay_segundos: null,
   };
   const upsell = {
     slug: 'upsell-1',
@@ -67,6 +69,7 @@ describe('integracionDeFunnel con wallet', () => {
     url_externa: 'https://elfunnel.com/upsell1',
     permite_rechazo: true,
     producto: { nombre: 'Extra', precio: '19.90', moneda: 'usd' },
+    delay_segundos: null,
   };
 
   it('entrega las dos variantes por paso de upsell', () => {

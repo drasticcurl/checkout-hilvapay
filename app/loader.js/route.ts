@@ -629,6 +629,49 @@ const SCRIPT = `
       } catch (e) {}
     }
 
+    // ── data-hilvana-delay: el botón aparece recién a los N segundos ────────
+    //
+    // Pensado para debajo de un VSL, en un punto fijo del video, sin que el
+    // operador del funnel tenga que escribir ningún JS: el número lo elige en
+    // el editor del paso, el panel lo interpola en el snippet que se copia
+    // (ver lib/admin/integracion.ts), y esto es lo único que lo interpreta —
+    // le da igual si el atributo vino del generador o si alguien lo escribió
+    // a mano.
+    //
+    // Se opera sobre el elemento MARCADO (el div de wallet, o el botón mismo
+    // de data-hilvana-upsell), no sobre un contenedor externo: así funciona
+    // igual sea cual sea el HTML que el operador puso alrededor.
+    //
+    // "visibility: hidden" y no "display: none": con display:none el elemento
+    // no ocupa espacio y todo lo que esté debajo salta hacia arriba cuando el
+    // botón aparece — un salto de layout justo en el momento de decisión es
+    // peor que un espacio vacío por unos segundos. Se fija la altura ANTES de
+    // ocultarlo, por si el navegador colapsara igual una caja vacía con solo
+    // visibility:hidden en algún layout (flex/grid con altura automática
+    // puede hacerlo).
+    function aplicarDelays() {
+      try {
+        var nodos = document.querySelectorAll('[data-hilvana-delay]');
+        for (var i = 0; i < nodos.length; i++) {
+          (function (el) {
+            var seg = parseFloat(el.getAttribute('data-hilvana-delay'));
+            if (!isFinite(seg) || seg <= 0) return;
+            if (el.getAttribute('data-hilvana-delay-armado')) return; // no reprocesar
+            el.setAttribute('data-hilvana-delay-armado', '1');
+
+            var alto = el.offsetHeight;
+            if (alto > 0) el.style.minHeight = alto + 'px';
+            el.style.visibility = 'hidden';
+
+            setTimeout(function () {
+              el.style.visibility = '';
+              el.style.minHeight = '';
+            }, seg * 1000);
+          })(nodos[i]);
+        }
+      } catch (e) {}
+    }
+
     // Al cargar: si vino ?ot= en la URL, se guarda. Si no, se usa el que ya
     // hubiera en sessionStorage. token() ya hace las dos cosas por su cuenta,
     // pero se llama una vez ahora para que quede guardado ni bien carga el
@@ -644,10 +687,13 @@ const SCRIPT = `
     try {
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', montarTodosLosWallets);
+        document.addEventListener('DOMContentLoaded', aplicarDelays);
       } else {
         montarTodosLosWallets();
+        aplicarDelays();
       }
       window.addEventListener('load', montarTodosLosWallets);
+      window.addEventListener('load', aplicarDelays);
     } catch (e) {}
 
     window.hilvana = {
@@ -660,6 +706,13 @@ const SCRIPT = `
        * DOM. Es idempotente.
        */
       montarWallets: montarTodosLosWallets,
+      /**
+       * Igual idea que montarWallets, para el atributo data-hilvana-delay: si
+       * el funnel inserta el bloque con el botón DESPUÉS de que este script ya
+       * corrió, llamala una vez insertado. Es idempotente (marca cada nodo con
+       * data-hilvana-delay-armado la primera vez que lo procesa).
+       */
+      aplicarDelays: aplicarDelays,
     };
   } catch (e) {
     // Ni esto puede tirar hacia afuera. Si algo de lo de arriba falló de una

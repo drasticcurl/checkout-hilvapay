@@ -41,6 +41,14 @@ export type PasoDeFunnel = {
   paso_rechazado_id: string | null;
   activo: boolean;
   producto: { id: string; nombre: string; precio: string; moneda: string; imagen_url: string | null };
+  /**
+   * Segundos que el snippet le dice al `loader.js` que espere antes de mostrar
+   * el botón — pensado para que el botón aparezca debajo de un VSL a un punto
+   * fijo del video, sin que el operador tenga que tocar JS. `null` = sin
+   * demora, el default de siempre. Vive en `paginas.config` (jsonb), mismo
+   * lugar que `timerMinutos`/`textoBoton` de la página de checkout.
+   */
+  delay_segundos: number | null;
 };
 
 /** El funnel con sus pasos, para la pantalla de lista y la del editor. */
@@ -68,6 +76,7 @@ type FilaPaso = {
   paso_aceptado_id: string | null;
   paso_rechazado_id: string | null;
   activo: boolean;
+  config: { delaySegundos?: number } | null;
   prod_id: string;
   prod_nombre: string;
   prod_precio: string;
@@ -78,6 +87,7 @@ type FilaPaso = {
 const SELECT_PASOS = `
   select pg.id, pg.funnel_id, pg.slug, pg.producto_id, pg.tipo, pg.orden, pg.nombre,
          pg.url_externa, pg.permite_rechazo, pg.paso_aceptado_id, pg.paso_rechazado_id, pg.activo,
+         pg.config,
          pr.id as prod_id, pr.nombre as prod_nombre, pr.precio as prod_precio,
          pr.moneda as prod_moneda, pr.imagen_url as prod_imagen_url
     from paginas pg
@@ -98,6 +108,14 @@ function filaAPaso(f: FilaPaso): PasoDeFunnel {
     paso_aceptado_id: f.paso_aceptado_id,
     paso_rechazado_id: f.paso_rechazado_id,
     activo: f.activo,
+    // El jsonb puede venir null (páginas creadas antes de tener esta
+    // columna) o sin la clave (config: {} de siempre). Los dos casos caen en
+    // null — no en 0, que sería "demora de cero segundos" y es un valor
+    // distinto y válido.
+    delay_segundos:
+      typeof f.config?.delaySegundos === 'number' && f.config.delaySegundos > 0
+        ? f.config.delaySegundos
+        : null,
     producto: {
       id: f.prod_id,
       nombre: f.prod_nombre,
@@ -167,6 +185,8 @@ export type EntradaPaso = {
    */
   paso_aceptado_indice: number | null;
   paso_rechazado_indice: number | null;
+  /** Ver `PasoDeFunnel.delay_segundos`. `null` = sin demora. */
+  delay_segundos: number | null;
 };
 
 export type EntradaFunnel = {
@@ -204,6 +224,17 @@ export async function guardarFunnel(id: string | null, datos: EntradaFunnel): Pr
     // que sin slug el paso es imposible de cablear del lado del funnel.
     if ((p.slug ?? '').trim() === '') {
       return { ok: false, error: 'datos_invalidos', detalle: `al paso "${p.nombre ?? '(sin nombre)'}" le falta el slug` };
+    }
+    // Un delay negativo no tiene sentido y uno absurdamente largo (más de 10
+    // minutos) casi seguro es un error de tipeo — 600 y no un número más
+    // "redondo" porque un VSL real puede legítimamente durar varios minutos
+    // antes de mostrar la oferta.
+    if (p.delay_segundos != null && (p.delay_segundos < 0 || p.delay_segundos > 600)) {
+      return {
+        ok: false,
+        error: 'datos_invalidos',
+        detalle: `la demora del paso "${p.nombre ?? p.slug}" tiene que estar entre 0 y 600 segundos`,
+      };
     }
   }
 
@@ -253,18 +284,42 @@ export async function guardarFunnel(id: string | null, datos: EntradaFunnel): Pr
           await c.query(
             `update paginas
                 set slug = $1, producto_id = $2, tipo = $3, orden = $4, nombre = $5,
-                    url_externa = $6, permite_rechazo = $7, funnel_id = $8, updated_at = now()
-              where id = $9`,
-            [slug, p.producto_id, p.tipo, p.orden, p.nombre, p.url_externa, p.permite_rechazo, funnelId, p.id],
+                    url_externa = $6, permite_rechazo = $7, funnel_id = $8,
+                    config = jsonb_set(coalesce(config, '{}'::jsonb), '{delaySegundos}',
+                      $9::jsonb, true),
+                    updated_at = now()
+              where id = $10`,
+            [
+              slug,
+              p.producto_id,
+              p.tipo,
+              p.orden,
+              p.nombre,
+              p.url_externa,
+              p.permite_rechazo,
+              funnelId,
+              JSON.stringify(p.delay_segundos ?? null),
+              p.id,
+            ],
           );
           idsPorIndice.push(p.id);
         } else {
           const fila = await c.query<{ id: string }>(
             `insert into paginas (slug, producto_id, tipo, orden, nombre, url_externa,
                                   permite_rechazo, funnel_id, config, activo)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, '{}'::jsonb, false)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, false)
              returning id`,
-            [slug, p.producto_id, p.tipo, p.orden, p.nombre, p.url_externa, p.permite_rechazo, funnelId],
+            [
+              slug,
+              p.producto_id,
+              p.tipo,
+              p.orden,
+              p.nombre,
+              p.url_externa,
+              p.permite_rechazo,
+              funnelId,
+              JSON.stringify(p.delay_segundos ? { delaySegundos: p.delay_segundos } : {}),
+            ],
           );
           idsPorIndice.push(fila.rows[0].id);
         }

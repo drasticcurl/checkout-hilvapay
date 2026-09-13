@@ -23,6 +23,8 @@ export type PasoEditor = {
   producto: { id: string; nombre: string; precio: string; moneda: string; imagen_url: string | null };
   paso_aceptado_indice: number | null;
   paso_rechazado_indice: number | null;
+  /** Ver `PasoDeFunnel.delay_segundos` en `lib/admin/funnels.ts`. `null` = sin demora. */
+  delay_segundos: number | null;
 };
 
 type Props = {
@@ -65,6 +67,9 @@ export function FormularioPaso({ paso, productos, permitirFront, onGuardar, onCa
   const [productoId, setProductoId] = useState(paso?.producto_id ?? productos[0]?.id ?? '');
   const [urlExterna, setUrlExterna] = useState(paso?.url_externa ?? '');
   const [slug, setSlug] = useState(paso?.slug ?? '');
+  const [delaySegundos, setDelaySegundos] = useState(
+    paso?.delay_segundos != null ? String(paso.delay_segundos) : '',
+  );
   const [error, setError] = useState<string | null>(null);
 
   const producto = productos.find((p) => p.id === productoId) ?? null;
@@ -103,6 +108,15 @@ export function FormularioPaso({ paso, productos, permitirFront, onGuardar, onCa
       return;
     }
 
+    // El delay solo aplica al upsell: el front se abre directo en el browser,
+    // no hay ningún botón que "aparezca" ahí. Vacío o inválido = sin demora,
+    // no un error — es el estado normal de la mayoría de los pasos.
+    const delayParseado = tipo === 'upsell' && delaySegundos.trim() !== '' ? Number(delaySegundos) : null;
+    if (delayParseado != null && (!Number.isFinite(delayParseado) || delayParseado < 0 || delayParseado > 600)) {
+      setError('La demora tiene que ser un número entre 0 y 600 segundos.');
+      return;
+    }
+
     onGuardar({
       id: paso?.id ?? null,
       slug: slugFinal,
@@ -118,6 +132,7 @@ export function FormularioPaso({ paso, productos, permitirFront, onGuardar, onCa
         : paso?.producto ?? { id: '', nombre: '', precio: '', moneda: 'usd', imagen_url: null },
       paso_aceptado_indice: paso?.paso_aceptado_indice ?? null,
       paso_rechazado_indice: paso?.paso_rechazado_indice ?? null,
+      delay_segundos: delayParseado != null && delayParseado > 0 ? delayParseado : null,
     });
   }
 
@@ -237,6 +252,27 @@ export function FormularioPaso({ paso, productos, permitirFront, onGuardar, onCa
             onChange={(e) => setUrlExterna(e.target.value)}
             placeholder="https://elfunnel.com/upsell1"
             className={clasesControl()}
+          />
+        </Campo>
+      ) : null}
+
+      {tipo === 'upsell' ? (
+        <Campo
+          etiqueta="Demora del botón"
+          htmlFor="delay-paso"
+          ayuda="En segundos. El botón queda oculto hasta que pase este tiempo — pensado para que aparezca debajo del VSL en un punto fijo. Vacío o 0 = sin demora."
+        >
+          <input
+            id="delay-paso"
+            type="number"
+            inputMode="numeric"
+            min={0}
+            max={600}
+            step={1}
+            value={delaySegundos}
+            onChange={(e) => setDelaySegundos(e.target.value)}
+            placeholder="0"
+            className={clasesControl('font-mono')}
           />
         </Campo>
       ) : null}

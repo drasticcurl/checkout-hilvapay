@@ -34,6 +34,7 @@ function paso(over: Partial<PasoParaSnippet> = {}): PasoParaSnippet {
     url_externa: 'https://funnel.com/upsell-latam',
     permite_rechazo: false,
     producto: { nombre: 'Programa TURBO', precio: '19.90', moneda: 'usd' },
+    delay_segundos: null,
     ...over,
   };
 }
@@ -162,6 +163,18 @@ describe('snippetBotonHtml', () => {
     expect(html).toContain('data-hilvana-upsell="otro-slug"');
     expect(html).not.toContain('data-hilvana-upsel="');
   });
+
+  it('sin delay configurado, no agrega data-hilvana-delay (el caso normal, sin cambios)', () => {
+    const html = snippetBotonHtml(paso({ delay_segundos: null }), 'US$ 19,90');
+    expect(html).not.toContain('data-hilvana-delay');
+  });
+
+  it('con delay configurado, lo interpola en el mismo elemento del botón', () => {
+    const html = snippetBotonHtml(paso({ delay_segundos: 12 }), 'US$ 19,90');
+    expect(html).toBe(
+      '<button type="button" data-hilvana-upsell="upsell1-latam" data-hilvana-delay="12">\n  Sí, quiero — US$ 19,90\n</button>',
+    );
+  });
 });
 
 describe('snippetBotonJsx', () => {
@@ -173,6 +186,11 @@ describe('snippetBotonJsx', () => {
     // React. Acá el atributo data-* lo lee el listener global.
     expect(jsx).not.toContain('onClick');
     expect(jsx).toContain('data-hilvana-upsell="upsell1-latam"');
+  });
+
+  it('con delay configurado, lo interpola en su propia línea', () => {
+    const jsx = snippetBotonJsx(paso({ delay_segundos: 12 }), 'US$ 19,90');
+    expect(jsx).toContain('data-hilvana-delay="12"');
   });
 });
 

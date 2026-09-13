@@ -161,6 +161,7 @@ function pasoFront(over: Partial<EntradaFunnel['pasos'][0]> = {}): EntradaFunnel
     permite_rechazo: false,
     paso_aceptado_indice: null,
     paso_rechazado_indice: null,
+    delay_segundos: null,
     ...over,
   };
 }
@@ -177,6 +178,7 @@ function pasoUpsell(over: Partial<EntradaFunnel['pasos'][0]> = {}): EntradaFunne
     permite_rechazo: true,
     paso_aceptado_indice: null,
     paso_rechazado_indice: null,
+    delay_segundos: null,
     ...over,
   };
 }

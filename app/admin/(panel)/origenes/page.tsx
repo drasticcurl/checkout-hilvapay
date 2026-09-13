@@ -48,6 +48,7 @@ export default async function OrigenesPage(): Promise<JSX.Element> {
         permite_rechazo: p.permite_rechazo,
         paso_rechazado_id: p.paso_rechazado_id,
         producto: p.producto,
+        delay_segundos: p.delay_segundos,
       })),
     ),
   );

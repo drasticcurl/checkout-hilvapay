@@ -29,6 +29,13 @@ export type PasoParaSnippet = {
   url_externa: string | null;
   permite_rechazo: boolean;
   producto: { nombre: string; precio: string; moneda: string };
+  /**
+   * Segundos que el botón espera antes de mostrarse, configurados en el
+   * editor del paso. `null` = sin demora, no se agrega el atributo. El
+   * `loader.js` es quien lo interpreta (`data-hilvana-delay`); este módulo
+   * solo lo interpola en el HTML/JSX generado.
+   */
+  delay_segundos: number | null;
 };
 
 /** El bloque de código de un paso, listo para mostrar con un botón de copiar. */
@@ -208,7 +215,8 @@ import Script from 'next/script';
  */
 export function snippetBotonHtml(paso: PasoParaSnippet, precio: string): string {
   const etiqueta = `Sí, quiero — ${precio}`;
-  return `<button type="button" data-hilvana-upsell="${paso.slug}">
+  const delay = paso.delay_segundos != null ? ` data-hilvana-delay="${paso.delay_segundos}"` : '';
+  return `<button type="button" data-hilvana-upsell="${paso.slug}"${delay}>
   ${etiqueta}
 </button>`;
 }
@@ -225,9 +233,10 @@ export function snippetBotonHtml(paso: PasoParaSnippet, precio: string): string 
  */
 export function snippetBotonJsx(paso: PasoParaSnippet, precio: string): string {
   const etiqueta = `Sí, quiero — ${precio}`;
+  const delay = paso.delay_segundos != null ? `\n  data-hilvana-delay="${paso.delay_segundos}"` : '';
   return `<button
   type="button"
-  data-hilvana-upsell="${paso.slug}"
+  data-hilvana-upsell="${paso.slug}"${delay}
   className="tu-clase-de-boton"
 >
   ${etiqueta}
@@ -275,7 +284,8 @@ export function snippetBotonJsx(paso: PasoParaSnippet, precio: string): string {
  * con el estilo nativo de cada wallet. Apple no permite reestilar el suyo.
  */
 export function snippetWalletHtml(paso: PasoParaSnippet): string {
-  return `<div data-hilvana-wallet="${paso.slug}"></div>`;
+  const delay = paso.delay_segundos != null ? ` data-hilvana-delay="${paso.delay_segundos}"` : '';
+  return `<div data-hilvana-wallet="${paso.slug}"${delay}></div>`;
 }
 
 /**
@@ -286,7 +296,8 @@ export function snippetWalletHtml(paso: PasoParaSnippet): string {
  * fuera del árbol que React administra, así que no hay conflicto de hidratación.
  */
 export function snippetWalletJsx(paso: PasoParaSnippet): string {
-  return `<div data-hilvana-wallet="${paso.slug}" />`;
+  const delay = paso.delay_segundos != null ? ` data-hilvana-delay="${paso.delay_segundos}"` : '';
+  return `<div data-hilvana-wallet="${paso.slug}"${delay} />`;
 }
 
 /**

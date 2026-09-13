@@ -53,6 +53,7 @@ function pasosAEditor(funnel: FunnelConPasos | null): PasoEditor[] {
     producto: p.producto,
     paso_aceptado_indice: p.paso_aceptado_id != null ? indicePorId.get(p.paso_aceptado_id) ?? null : null,
     paso_rechazado_indice: p.paso_rechazado_id != null ? indicePorId.get(p.paso_rechazado_id) ?? null : null,
+    delay_segundos: p.delay_segundos,
   }));
 }
 
@@ -606,6 +607,7 @@ function SnippetDelPaso({
     url_externa: paso.url_externa,
     permite_rechazo: paso.permite_rechazo,
     producto: paso.producto,
+    delay_segundos: paso.delay_segundos,
   };
 
   // El destino del "no gracias" sale del paso al que apunta `paso_rechazado_indice`,
