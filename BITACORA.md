@@ -614,3 +614,166 @@ el comentario explicando **por qué no es `upsell-1x2`** para que nadie lo "corr
   base, así que funciona, pero el piso de respaldo apunta a otro lado.
 - **El upsell de prueba sale US$ 1**, igual que el front. Para distinguir los dos cobros en el panel
   conviene un precio distinto.
+
+---
+
+## 2026-09-13 — El cobro off-session se destraba: era la checkout configuration del front
+
+Rama: `feature/checkout-sin-configuration` (sin merge a `main` todavía). Releases en producción:
+`20260913132226` → `20260913162128` (siete deploys sucesivos sobre la misma rama, cada uno con su
+propio fix).
+
+### De dónde salió
+
+El objetivo era llevar a este proyecto un mecanismo de one-click que se había probado funcionando en
+un POC standalone, aparte de este repo. La sesión del 2026-09-11 había cerrado el caso con "diez
+hipótesis descartadas, solo Whop puede destrabarlo" — y resultó que faltaba una hipótesis: nunca se
+probó sacar la checkout configuration del pago del front.
+
+### La causa real, encontrada comparando contra el POC
+
+Las diez hipótesis previas probaron el lado del **cobro** (`POST /payments`): versión de API,
+permisos, la cuenta, el plan, el tipo de tarjeta, el mandato 3DS explícito
+(`three_ds_level: 'mandate_challenge'`, sección del 2026-09-11 §4.7). Ninguna probó el lado de la
+**compra que guarda la tarjeta** sin pasar por una checkout configuration en absoluto.
+
+Se hicieron cobros off-session reales, con la API real de Whop, en la misma cuenta
+(`biz_Me8Lbiv174brtM`) que ya había fallado diez veces con configuration:
+
+```
+pay_2NKg0ldIFliAAi  front,  plan_BYnb2AYn36mO3   → paid/succeeded, checkout_configuration_id: null
+pay_e7mWetvrDT8sOy  upsell, plan_tzGuzhZAV8R0x   → paid/succeeded, cobro off-session exitoso
+pay_DIR6IhvjDn7WA7  upsell (repetido)             → paid/succeeded (tardó unos segundos en resolver)
+pay_F7iBmGIkZ1pFdI  upsell (tercer intento)       → open/failed, decline_code: insufficient_funds
+```
+
+El último es la prueba que cierra el caso: es la **primera vez en toda la investigación de este
+bloqueo** que un cobro off-session llega hasta el procesador real y recibe un `decline_code` del
+banco. Las diez hipótesis anteriores siempre veían el mismo 400 genérico sin `decline_code`,
+rechazado en 66-85 ms sin ida y vuelta al procesador — la transacción nunca llegaba a evaluarse.
+
+También se confirmó por qué la configuration no se puede "arreglar" desde el lado del cobro:
+`POST /payments` no acepta un `checkout_configuration_id` en su body — ese campo del objeto Payment
+solo se llena cuando el *comprador* pagó a través de esa configuration, nunca cuando el servidor
+cobra off-session con `member_id`/`payment_method_id`. Si la configuration es la causa, tiene que
+estarlo afectando en el momento de la compra original, no en el cobro del upsell.
+
+### El cambio, y el riesgo de seguridad que había que resolver antes de aplicarlo
+
+El checkout normal del front (`app/api/checkout/sesion/route.ts`) dejó de llamar a
+`crearCheckoutConfiguration`: pasa `planId` directo a `WhopCheckoutEmbed`, igual que el POC. El modo
+recuperación (T03 §7) no cambia — ahí sí hace falta la configuration, porque el pago tiene que atarse
+a una orden que YA existe con `orden_id` exacto.
+
+El costo: sin configuration, el pago no lleva `metadata.orden_id` (el embed con `planId` directo no
+tiene ninguna prop de metadata — verificado contra los tipos reales de `@whop/checkout` instalado, no
+contra la doc). El claim sincrónico (`/api/checkout/reclamar`) usaba ese id para verificar que un
+`receiptId` recibido del navegador realmente pertenece a esta orden y no a una compra ajena de un
+dólar en Whop — sin eso, cualquiera con un `receiptId` propio podría reclamar el producto de otra
+persona.
+
+Se revisó el código completo de vinculación (`lib/cobros.ts`, el tipo `Orden`) buscando una columna
+que sirviera de reemplazo exacto, sin encontrar una: antes del primer pago, la orden no tiene ningún
+dato de Whop guardado. Se agregó un tercer camino al chequeo de pertenencia, deliberadamente más débil
+que un id exacto y con el trade-off documentado explícito en el comentario del archivo: el pago está
+pagado, es del **mismo plan** que la página de la orden, posterior a su creación, dentro de la
+ventana del token, y ningún otro cobro ya registrado tiene ese `whop_payment_id`.
+
+### El bug real que costó una compra real antes de encontrarlo
+
+La primera versión de ese tercer camino comparaba el *email* del pago contra el de la orden, exacto.
+Una compra real (`pay_yZUBblwNtKWMWZ`) tenía el comprador con `abrilvogel12@gmail.co` en la orden
+(typo genuino al tipear, no capturado por `normalizarEmail` porque los dos valores son strings
+distintos de verdad) contra `abrilvogel12@gmail.com` en el pago real de Whop. El claim rechazó un
+pago legítimo, y la orden quedó sin `member_id`/`payment_method_id` — hubo que completarlos a mano por
+SQL con los datos reales del webhook para poder seguir probando sin gastar otra compra.
+
+Se corrigió cambiando el criterio de "email exacto" a "mismo plan + ventana + no reclamado antes", que
+no depende de que ningún string humano coincida carácter por carácter.
+
+### Un segundo bug, de UI, encontrado en la misma compra de prueba
+
+El botón del upsell se quedó mostrando "Procesando..." para siempre, aunque el cobro ya estaba
+`pagado` en la base (Whop lo había confirmado bien). Causa: `resolverSiguienteUrl` sí devolvía una
+`siguienteUrl` válida (verificado repitiendo la consulta después), pero el camino del loader que se
+ejecuta cuando el cobro no termina en un redirect hacía `deshabilitar(boton, null)` seguido de
+`removeAttribute('disabled')` — eso saca el atributo `disabled` bien, pero `deshabilitar()` solo pisa
+el `textContent` cuando el segundo argumento es *truthy*. Con `null`, el texto queda pegado en
+"Procesando..." para siempre, aunque el botón ya no esté deshabilitado.
+
+Se agregó `habilitar(boton)`: guarda el texto original en un atributo `data-hilvana-texto-original` la
+primera vez que se pisa con "Procesando...", y lo restaura en los tres caminos donde el cobro no
+termina en un redirect.
+
+### El patrón de bug que se repitió tres veces en la misma sesión, y cómo se blindó
+
+Al escribir comentarios largos dentro del `SCRIPT` template literal de `app/loader.js/route.ts`, usar
+un backtick sin escapar (`` ` `` en vez de `` \` ``) cierra el string en runtime antes de tiempo — sin
+que `tsc` lo marque, porque el archivo compila igual: el error solo aparece **evaluando** el template
+literal, no analizándolo estáticamente. El bloque completo de código que queda después del backtick
+suelto desaparece del `.js` servido, en silencio.
+
+Pasó tres veces en esta sesión (una vez con la feature del delay, dos veces con la del wallet
+directo), y las tres veces se detectó de la misma forma: comparando el número de líneas del `.js`
+real servido contra las esperadas, y buscando el contenido nuevo con `grep` en el archivo descargado
+— nunca alcanzó con `tsc --noEmit` ni con `node --check` sobre el archivo final (que reporta "válido"
+porque, técnicamente, lo es: solo que no es el código que se quiso escribir).
+
+**El proceso de verificación que blindó esto, para no repetirlo:**
+
+```bash
+python3 -c "
+with open('app/loader.js/route.ts') as f: lineas = f.readlines()
+# recorrer el rango del template y marcar cualquier backtick no precedido por backslash
+"
+```
+
+Y, más importante, **verificar contra el archivo servido en runtime, no solo contra el código
+fuente**: build + `next start` en un puerto limpio + confirmar el PID real con `lsof` antes de
+`curl` + contar líneas + buscar el contenido nuevo + `node --check`. La primera vez que se intentó
+esta verificación dio un falso "todo bien" porque un proceso zombie de una corrida anterior seguía
+sirviendo en el mismo puerto — hay que confirmar el PID real, no asumir que `kill $VAR` funcionó.
+
+### La feature de producto que salió de esta sesión: el botón elige la rama solo
+
+Además del fix del bloqueo, se agregaron dos cosas de producto a pedido, sobre la misma rama:
+
+1. **Demora configurable del botón del upsell** (`paginas.config.delaySegundos`, sin migración —
+   la columna jsonb ya existía). El panel interpola `data-hilvana-delay="<segundos>"` en el snippet
+   generado; el loader oculta el elemento con `visibility:hidden` (reservando el alto para no saltar
+   el layout) y lo revela con `setTimeout`. Pensado para que el botón aparezca debajo de un VSL en un
+   punto fijo del video, sin que el operador toque JS.
+
+2. **El botón elige wallet o cobro silencioso según con qué se pagó el front**
+   (`ordenes.whop_payment_method_type`, migración 009). Si fue tarjeta, intenta el cobro silencioso
+   directo. Si fue Apple Pay/Google Pay — cuyo DPAN nunca soporta off-session, por diseño de la red,
+   no por un bug de Whop — el botón salta directo a abrir la hoja de wallet en el mismo gesto de
+   click, sin el intento fallido intermedio que existía hasta ahora. La sesión de Whop se precarga al
+   cargar la página (no al click), para que decidir la rama no le agregue al comprador un `await`
+   entre su gesto real y el intento de abrir la hoja — la ventana que los navegadores exigen para
+   permitirlo.
+
+   Se documentó explícitamente que esto **no garantiza al 100%** que la hoja se abra sola: el click
+   sintético siempre dependió de un comportamiento no documentado por los navegadores, y el propio
+   código ya tenía (antes de esta sesión) un fallback visual a los 1200 ms para cuando no se abre. La
+   precarga reduce la ventana de fallo, no la elimina.
+
+### Verificado, en cada uno de los siete deploys sucesivos
+
+`tsc --noEmit` limpio, la suite completa de tests pasando (468 → 471, se agregaron 3 tests del
+delay), `next build` compilando, y el `loader.js` real descargado de `pay.hilvanapp.com` en
+producción — no solo local — confirmado con el contenido esperado y sintaxis válida después de cada
+cambio al archivo.
+
+### Lo que queda pendiente, explícitamente
+
+1. **El merge a `main`.** Todo el trabajo de esta sesión vive en `feature/checkout-sin-configuration`,
+   deployado a producción real con `DEPLOY_BRANCH` (patrón ya documentado en `COMO-DEPLOYAR.md`), pero
+   `main` no tiene ninguno de estos cambios.
+2. **Correr más volumen antes de confiar en el mecanismo de "mismo plan + ventana" del claim.** Es un
+   trade-off de seguridad aceptado a propósito, con el riesgo residual documentado, pero no
+   reemplaza la fuerza de un id exacto.
+3. **Decidir si cambiar el default del selector del editor de funnels** de "wallet" a "tarjeta
+   guardada" — es una decisión de producto, no un bloqueo técnico. El botón de wallet sigue
+   necesitándose como fallback en dos casos (pago con wallet en el front, o método no guardable en
+   absoluto), así que no se elimina en ningún escenario.

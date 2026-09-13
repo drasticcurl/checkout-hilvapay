@@ -1,7 +1,10 @@
 # ESTADO — checkout propio sobre Whop (hilvapay)
 
-Última actualización: **2026-09-11** (cuenta de Whop rotada por el panel, el cobro off-session
-bloqueado por Whop, tutorial guiado, alertas del bot y rate limit en el cobro).
+Última actualización: **2026-09-13** (el cobro off-session del upsell se destrabó: la causa era la
+checkout configuration del front, no algo del lado de Whop. Verificado con cobros reales en
+producción. Vive en la rama `feature/checkout-sin-configuration`, pendiente de merge a `main`.
+También: demora configurable del botón del upsell, y el botón elige wallet o cobro silencioso según
+con qué se pagó el front).
 
 Este archivo es la foto del proyecto: qué es, qué está hecho, qué falta y qué hay que saber para no
 romperlo. Si algo de acá no coincide con la realidad, la realidad tiene razón: corregí el archivo.
@@ -236,69 +239,101 @@ funnels viejos están en §5.
 
 Ordenado por lo que bloquea a lo que no.
 
-### 3.0 El cobro off-session está bloqueado por Whop. Cerrado de este lado.
+### 3.0 El cobro off-session — destrabado el 2026-09-13, verificado con compras reales
 
-**Diez hipótesis descartadas con evidencia. No hay nada más que ajustar acá.** El
-detalle completo, con los comandos, está en
-[`tasks/checkout-whop/DIAGNOSTICO-ONE-CLICK.md`](tasks/checkout-whop/DIAGNOSTICO-ONE-CLICK.md).
+**Actualizado el 2026-09-13.** Esta sección decía "cerrado de este lado, diez hipótesis descartadas,
+solo Whop puede destrabarlo" desde el 2026-09-11. Ya no es cierto: se encontró la causa real, se
+corrigió, y **hay cobros off-session reales y exitosos en producción**, verificados contra la API de
+Whop, no solo contra la respuesta de este servicio.
 
-Medido el **2026-09-11**: `POST /payments` con `account_id` + `plan_id` + `member_id` +
-`payment_method_id` —el cobro one-click del upsell, contra una tarjeta ya guardada— devuelve
-**siempre**:
+**La causa: la checkout configuration del front, no algo del lado de Whop.** Las diez hipótesis
+descartadas en la sesión del 2026-09-11 probaron exhaustivamente el lado del *cobro*
+(`POST /payments`): versión de API, permisos, la cuenta, el plan, el tipo de tarjeta, el mandato 3DS.
+Ninguna probó el lado de la *compra que guarda la tarjeta* sin pasar por una checkout configuration.
+Un POC aislado (fuera de este repo, mismo mecanismo de Whop) logró tres cobros off-session exitosos
+consecutivos en la misma cuenta, pasando `planId` directo al embed en vez de crear una configuration
+— exactamente la única variable que las diez hipótesis previas no habían aislado.
 
-```json
-{"error":{"type":"bad_request","message":"We could not process this payment request right now. Please try again later."}}
+Se replicó acá: el checkout normal del front (`app/api/checkout/sesion/route.ts`) **ya no crea una
+checkout configuration** — pasa `planId` directo a `WhopCheckoutEmbed`. El modo recuperación (T03
+§7) sigue usando configuration, porque ahí sí hace falta atar el pago nuevo a una orden que YA existe
+por `orden_id` exacto.
+
+**El costo del cambio, y cómo se compensó:** sin configuration, el pago del front no lleva
+`metadata.orden_id` (el embed con `planId` directo no tiene ninguna prop de metadata — verificado
+contra los tipos reales de `@whop/checkout`). El claim sincrónico (`/api/checkout/reclamar`) que
+verificaba pertenencia por ese id ahora tiene un tercer camino cuando no hay id exacto: el pago está
+pagado, es del **mismo plan** que la página de esta orden, posterior a su creación, dentro de la
+ventana del token, y ningún otro cobro ya registrado tiene ese `whop_payment_id`. Es deliberadamente
+más débil que un id exacto — el trade-off está documentado con el razonamiento completo en el propio
+comentario del archivo.
+
+**Un bug real que costó una compra real antes de encontrarlo:** la primera versión de ese tercer
+camino comparaba el *email* del pago contra el de la orden, carácter por carácter. Un typo genuino del
+comprador (`.co` en vez de `.com`) hizo que el claim rechazara un pago legítimo. Se corrigió pasando el
+criterio a "mismo plan + ventana de tiempo + no reclamado antes", que no depende de que ningún string
+coincida exacto.
+
+**Verificado con tráfico real, no solo con tests:**
+
+```
+pay_2NKg0ldIFliAAi   front, plan_BYnb2AYn36mO3    → paid/succeeded, sin configuration
+pay_e7mWetvrDT8sOy   upsell, plan_tzGuzhZAV8R0x   → paid/succeeded, cobro off-session real
+pay_F7iBmGIkZ1pFdI   upsell (repetido)             → open/failed, decline_code: insufficient_funds
 ```
 
-400, sin `decline_code`, y **sin crear ningún objeto de pago** en Whop.
+Ese último es la prueba más fuerte: es la **primera vez en toda la investigación de este bloqueo**
+que un cobro off-session llega hasta el procesador real y recibe un `decline_code` explícito del
+banco — en vez del 400 genérico sin `decline_code`, rechazado en 66-85 ms sin ida y vuelta al
+procesador, que documentaron las diez hipótesis descartadas.
 
-**Lo decisivo, medido el 2026-09-11 por la tarde:**
+**El botón del upsell ahora elige la rama sola, sin que el operador configure nada:** si el front se
+pagó con tarjeta tipeada, intenta el cobro silencioso directo. Si se pagó con Apple Pay o Google Pay
+— cuyo DPAN nunca va a soportar off-session, por diseño de la red, no por un bug de Whop — el botón
+salta directo a abrir la hoja de wallet en el mismo gesto de click, sin pasar primero por un intento
+que se sabe de antemano que va a fallar. El tipo de método se guarda en `ordenes.whop_payment_method_type`
+(migración 009) desde el claim y el webhook.
 
-| Variable | Resultado |
-|---|---|
-| **Dos cuentas de Whop independientes** (`biz_LHktpJ17c83CFt` y `biz_Me8Lbiv174brtM`) | las dos fallan igual |
-| **Webhook registrado y funcionando** en la cuenta que cobra | sigue fallando |
-| **Planes nuevos**, creados en la cuenta que cobra | sigue fallando |
-| **Tres versiones de API** (`2026-08-21-1` proxy, `2026-09-02-1` y `2026-09-11` nativas) | las tres fallan |
-| `capture: false` | falla |
-| `payment:charge` | **concedido**, confirmado por `GET /permissions` de Whop |
-| Tiempo de rechazo | **66–85 ms** → política interna, no llega al procesador |
-| `payments#create` exitosos en la historia de las dos cuentas | **cero** |
-| KashPay sobre la misma cuenta | **un** POST en su historia, y fue un checkout |
+**Lo que sigue sin garantizarse al 100%, y por qué:** el click sintético que abre la hoja de wallet
+depende de un comportamiento no documentado por los navegadores (solo aceptan abrir la hoja como
+reacción *directa* a un gesto real, sin ningún `await` en el medio). Precargar la sesión al cargar la
+página en vez de al click reduce esa ventana a casi nada, pero el propio código sigue teniendo el
+fallback visual a los 1200 ms para cuando no abre solo — exactamente el mismo fallback que ya existía
+antes de este cambio, porque la limitación no es nueva.
 
-Eso último responde la que era la última incógnita: **KashPay tampoco cobra off-session con Whop.**
-No hay un payload que se nos escape.
+**Lo que está en la rama, no en `main` todavía:** todo este trabajo vive en
+`feature/checkout-sin-configuration`, deployado y probado en producción real
+(`pay.hilvanapp.com`/`hilvapay.hilvanapp.com`) contra la cuenta `biz_Me8Lbiv174brtM` ("Sinvanapp",
+confirmada por el dueño del proyecto como cuenta de test, no la que factura hoy). Falta el merge a
+`main` — pendiente de que se decida que la prueba en producción alcanza, o de correr más volumen
+antes.
 
-**Lo único que puede destrabarlo es Whop.** El caso para escalar está armado en §12 del diagnóstico.
+**Lo que NO hay que volver a probar** (sigue siendo válido de la sesión anterior): versión de API,
+permisos, cambiar de cuenta, verificar la company, tipo de tarjeta, el plan, el payload,
+`capture:false`, ni buscar qué hace KashPay distinto. Lo único que cambió es que ahora también está
+descartado "es la checkout configuration en sí" — porque se probó explícitamente sin ella y funcionó.
 
-**Lo que NO hay que volver a probar:** versión de API, permisos, webhook, cambiar de cuenta,
-verificar la company, tipo de tarjeta, plan, payload, `capture:false`, ni buscar qué hace KashPay
-distinto.
-
-**Y ojo con Apple Pay:** pagar el front con Apple Pay no arregla el one-click, lo empeora. Un token
-de wallet es un DPAN atado al dispositivo y exige biometría en cada transacción, así que no sirve
-para un cobro sin el titular. Apple Pay resuelve el *click*, no la tarjeta guardada (§11.1 del
-diagnóstico).
-
-**Dos endpoints que sí sirven, encontrados en el camino:**
+**Dos endpoints que sí sirven, encontrados en el camino (siguen siendo útiles):**
 
 - `GET /payment_methods?member_id=<mber_...>` **lista** los métodos guardados de un member.
   `GET /payment_methods/<payt_...>` en cambio da **404** — es un falso negativo, no significa que el
   método no exista.
 - `GET /api_logs?account_id=...` es el log de las llamadas hechas con las keys de la cuenta,
-  filtrable por `operation_name`, `status`, `api_key_id` y `http_method`. Es lo que permitió probar
-  que ningún cobro salió nunca, ni el nuestro ni el de KashPay.
+  filtrable por `operation_name`, `status`, `api_key_id` y `http_method`.
 
-### 3.0.1 Lo que sí funciona, y está en producción
+### 3.0.1 El botón de wallet sigue existiendo, y sigue siendo necesario
 
-El **botón de wallet**: `<div data-hilvana-wallet="<slug>"></div>`.
+El **botón de wallet**: `<div data-hilvana-wallet="<slug>"></div>` — sigue en producción y no se
+elimina, aunque el off-session ya funcione. Cubre dos casos que el cobro silencioso no puede resolver
+por sí solo:
 
-Cobra on-session en un toque y cubre los tres casos con un solo elemento: Apple Pay en Safari,
-Google Pay en Chrome/Android, y **Whop Pay** (un diálogo que acepta tarjeta) en todo lo demás. El
-wallet resuelve el 3DS en el dispositivo, que es justo lo que el off-session no puede hacer.
+1. **El front se pagó con Apple Pay/Google Pay.** Ver §3.0: ahora el botón salta directo al wallet en
+   ese caso, en vez de intentar y fallar primero.
+2. **El front se pagó con un método que Whop no guarda en absoluto** (`metodo_guardado = false`). Ahí
+   no hay nada contra qué cobrar off-session, con o sin configuration.
 
-El panel lo entrega por default en el editor de funnels, con el botón off-session como segunda
-opción y un aviso de que no se use.
+El panel sigue entregando el wallet por default en el editor de funnels — cambiar ese default a
+"Tarjeta guardada" es una decisión de producto pendiente, no un bloqueo técnico.
 
 ### 3.1 Ya cobró. El front funciona de punta a punta.
 
@@ -325,8 +360,8 @@ psql "$DATABASE_URL" -c "select email, whop_member_id, whop_payment_method_id, m
 Si `whop_payment_method_id` queda en `null`, ahí sí hay algo que ajustar en el embed. Pero hoy no es
 el caso.
 
-**Lo que sigue sin funcionar es el cobro del upsell contra esa tarjeta, y es §3.0** — no un problema
-de este paso.
+**El cobro del upsell contra esa tarjeta ya funciona** — ver §3.0, destrabado el 2026-09-13. Sigue
+pendiente el merge a `main` de la rama que lo tiene.
 
 ### 3.2 Nadie recibe nada cuando compra
 
