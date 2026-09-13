@@ -44,7 +44,7 @@ export function CheckoutContainer({
 
   const [nombre, setNombre] = useState('');
   const [email, setEmail] = useState(recuperacion?.email ?? '');
-  const [sesion, setSesion] = useState<{ ordenId: string; sessionId: string; token: string } | null>(null);
+  const [sesion, setSesion] = useState<{ ordenId: string; sessionId: string | null; planId: string | null; token: string } | null>(null);
   const [creandoSesion, setCreandoSesion] = useState(false);
   const [embedListo, setEmbedListo] = useState(false);
   const [enviando, setEnviando] = useState(false);
@@ -104,7 +104,7 @@ export function CheckoutContainer({
         setMensajeError('No pudimos iniciar el pago. Recargá la página e intentá de nuevo.');
         return;
       }
-      const data = (await res.json()) as { ordenId: string; sessionId: string; token: string };
+      const data = (await res.json()) as { ordenId: string; sessionId: string | null; planId: string | null; token: string };
       setSesion(data);
     } catch {
       setMensajeError('No pudimos conectar con el servidor de pago. Revisá tu conexión.');
@@ -236,7 +236,7 @@ export function CheckoutContainer({
           <div className="flex flex-col gap-3">
             {sesion ? (
               <BotonExpress
-                sessionId={sesion.sessionId}
+                sessionId={sesion.sessionId ?? ''}
                 returnUrl={urlDeRetorno}
                 email={email}
                 environment={environment}
@@ -275,7 +275,7 @@ export function CheckoutContainer({
           <CajaTarjeta
             ref={controlesRef}
             sessionId={sesion.sessionId}
-            planId={producto.whopPlanId}
+            planId={sesion.planId ?? producto.whopPlanId}
             email={email}
             environment={environment}
             onReady={setEmbedListo}

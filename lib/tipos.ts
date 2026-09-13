@@ -166,8 +166,23 @@ export type Salida = {
 /** Respuesta de `POST /api/checkout/sesion`. */
 export type RespuestaSesion = {
   ordenId: string;
-  /** El `ch_...` que se le pasa al embed como `sessionId`. */
-  sessionId: string;
+  /**
+   * El `ch_...` que se le pasa al embed como `sessionId`. Ahora SOLO presente
+   * en modo recuperación (T03 §7): ahí sí hace falta la checkout
+   * configuration, porque el pago tiene que atarse a una orden que YA existe
+   * con `orden_id` exacto.
+   *
+   * En el checkout normal viene `null`: se usa `planId` en su lugar, sin
+   * configuration — ver el comentario de cabecera de
+   * `app/api/checkout/sesion/route.ts` para el motivo.
+   */
+  sessionId: string | null;
+  /**
+   * El `plan_...` para pasarle a `WhopCheckoutEmbed` directo, sin
+   * `sessionId`. Presente en el checkout normal; `null` en recuperación
+   * (ahí se usa `sessionId`, que sí necesita atar el pago a la orden exacta).
+   */
+  planId: string | null;
   /** El token de la orden, que viaja a las páginas de upsell como `?ot=`. */
   token: string;
 };

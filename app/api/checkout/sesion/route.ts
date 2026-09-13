@@ -1,5 +1,7 @@
 /**
- * POST /api/checkout/sesion — crea la orden y la sesión de checkout de Whop.
+ * POST /api/checkout/sesion — crea la orden y, para el checkout normal,
+ * devuelve directo el `planId` en vez de una `sessionId` de checkout
+ * configuration.
  *
  * body normal:        { slug, nombre, email, sessionId?, visitorId?, utms? }
  * body recuperación:  { slug, ordenIdRecuperacion }  (T03 §7)
@@ -11,14 +13,30 @@
  * + llama a Whop: el rate limit de abajo es la única defensa contra un bucle
  * que castigue la base y la cuota de la API.
  *
- * ── Modo recuperación (T03 §7, D3 del plan) ──────────────────────────────────
- * Cuando viene `ordenIdRecuperacion`, NO se crea una orden nueva: se reusa la
- * que ya existe (misma persona, mismo token) y solo se crea una checkout
- * configuration nueva, atada al PLAN de la página actual (el upsell que
- * rebotó), no al del front. `client_secret` es null para los pagos creados
- * desde un método guardado, así que no hay nada que "continuar": es un pago
- * nuevo, y por D1 tiene que caer sobre el mismo (orden_id, pagina_id) que ya
- * existe en `cobros` con `requiere_tarjeta`.
+ * ── Por qué el checkout normal ya NO crea una checkout configuration ────────
+ * Bloqueo histórico (ver BITACORA.md 2026-09-11 y 2026-09-13): diez hipótesis
+ * descartadas para el 400 genérico del cobro off-session del upsell, todas
+ * con el front pasando por una checkout configuration (`sessionId`). Un POC
+ * aislado, en la misma cuenta (`biz_Me8Lbiv174brtM`), con el mismo plan
+ * (`plan_BYnb2AYn36mO3`), pasando `planId` DIRECTO al embed —sin
+ * configuration— logró tres cobros off-session exitosos consecutivos,
+ * verificados contra la API real. La única diferencia estructural aislada
+ * entre "funciona" y "diez veces 400" es la checkout configuration del pago
+ * original.
+ *
+ * El costo de este cambio: `metadata.orden_id` ya no viaja en el pago del
+ * front (solo `POST /payments` acepta metadata; el embed con `planId` directo
+ * no tiene ninguna prop de metadata — verificado contra los tipos reales de
+ * `@whop/checkout`). El claim (`/api/checkout/reclamar`) compensa esto
+ * verificando `email` + ventana de tiempo en vez de un UUID exacto — más débil
+ * que antes, documentado ahí mismo con el trade-off explícito.
+ *
+ * El modo recuperación SIGUE usando checkout configuration con
+ * `mandate_challenge`: ahí el comprador ya tiene `whop_member_id` guardado de
+ * antes (viene de una compra que sí funcionó), así que ese camino no es el
+ * que se sospecha, y necesita la configuration para atar el pago nuevo a la
+ * MISMA orden que ya existe con `requiere_tarjeta` — un caso donde SÍ hace
+ * falta el vínculo exacto por `orden_id`, no solo por email.
  */
 import { randomBytes } from 'node:crypto';
 import { NextResponse } from 'next/server';
@@ -167,7 +185,12 @@ export async function POST(req: Request): Promise<Response> {
     // pago original del front dejaría de poder resolver la orden por esa vía.
     // El claim de recuperación de todos modos verifica por `metadata.orden_id`
     // primero, así que no necesita esta columna actualizada.
-    const respuesta: RespuestaSesion = { ordenId: orden.id, sessionId: cfg.id, token: orden.token };
+    const respuesta: RespuestaSesion = {
+      ordenId: orden.id,
+      sessionId: cfg.id,
+      planId: null,
+      token: orden.token,
+    };
     return NextResponse.json(respuesta, { status: 200 });
   }
 
@@ -176,7 +199,8 @@ export async function POST(req: Request): Promise<Response> {
   const emailCrudo = body.email as string;
 
   // 2. Normalizar el email a la forma canónica: es lo que se le prefill al
-  //    embed y lo que va al email de entrega.
+  //    embed y lo que va al email de entrega. También es lo que el claim usa
+  //    para verificar pertenencia ahora que no hay metadata en el pago.
   const email = normalizarEmail(emailCrudo);
   const sessionId = comoUuidONull(body.sessionId ?? null);
   const visitorId = comoUuidONull(body.visitorId ?? null);
@@ -186,10 +210,10 @@ export async function POST(req: Request): Promise<Response> {
   const token = randomBytes(32).toString('base64url');
   const tokenExpiraAt = new Date(Date.now() + HORAS_VALIDEZ_TOKEN * 60 * 60 * 1000);
 
-  // 4. INSERT en `ordenes` ANTES de llamar a Whop. Si Whop falla después,
-  //    queda una orden huérfana sin sesión (basura inofensiva). Al revés
-  //    -sesión creada y orden no insertada- quedaría un pago posible sin
-  //    nadie a quien atribuirlo.
+  // 4. INSERT en `ordenes`. Ya no hay llamada a Whop en este paso: sin
+  //    checkout configuration no hay nada que crear del lado de Whop antes de
+  //    mostrar el embed. El `planId` sale directo de la página, no de una
+  //    respuesta de Whop.
   const [orden] = await q<{ id: string }>(
     `insert into ordenes (pagina_id, email, nombre, token, token_expira_at, session_id, visitor_id, utms)
      values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
@@ -206,34 +230,15 @@ export async function POST(req: Request): Promise<Response> {
     ],
   );
 
-  // 5. Crear la checkout configuration. El metadata.orden_id es lo que ata el
-  //    pago a la orden (D7 del plan).
-  let cfg;
-  try {
-    cfg = await crearCheckoutConfiguration({
-      planId: fila.whop_plan_id as string,
-      metadata: { orden_id: orden.id },
-      // LA COMPRA DEL FRONT ES DONDE SE CREA EL MANDATO. `mandate_challenge`
-      // hace el desafío 3DS acá, una vez, con el comprador presente — y eso es
-      // lo que autoriza los cobros one-click de todos los upsells que sigan.
-      //
-      // Antes iba `frictionless`, que le pide a Whop EVITAR el desafío. Se
-      // ahorraba una pantalla y se perdía el módulo entero de upsells: sin
-      // mandato, `POST /payments` off-session devuelve un 400 genérico que no
-      // menciona nada de esto (ver `crearCheckoutConfiguration`).
-      threeDsLevel: 'mandate_challenge',
-    });
-  } catch (err) {
-    const motivo = err instanceof WhopError ? `${err.status} ${err.message}` : String(err);
-    console.error(`[checkout/sesion] no se pudo crear la checkout configuration de la orden ${orden.id}:`, motivo);
-    return NextResponse.json({ error: 'payload_invalido' }, { status: 400 });
-  }
-
-  // 6. Guardar cfg.id en ordenes.whop_checkout_config_id.
-  await q('update ordenes set whop_checkout_config_id = $1, updated_at = now() where id = $2', [cfg.id, orden.id]);
-
-  // 7. Devolver { ordenId, sessionId, token }. NUNCA el whop_plan_id: el
-  //    browser no lo necesita.
-  const respuesta: RespuestaSesion = { ordenId: orden.id, sessionId: cfg.id, token };
+  // 5. Devolver { ordenId, sessionId: null, planId, token }. `whop_plan_id`
+  //    SÍ se manda al browser en este modo: es lo único que el embed necesita
+  //    para montarse con `planId` directo, y no es secreto (es el mismo id que
+  //    aparece en la URL de un checkout link público de Whop).
+  const respuesta: RespuestaSesion = {
+    ordenId: orden.id,
+    sessionId: null,
+    planId: fila.whop_plan_id as string,
+    token,
+  };
   return NextResponse.json(respuesta, { status: 200 });
 }

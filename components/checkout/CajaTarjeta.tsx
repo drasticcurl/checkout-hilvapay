@@ -13,23 +13,31 @@ export type ControlesTarjeta = { submit: () => Promise<void> };
  * sin tocar — es la misma limitación que tiene KashPay hoy (Whop Elements,
  * que sí permite CSS propio en los campos, está en beta y no se usa acá).
  *
- * `sessionId` viene de `crearCheckoutConfiguration` (mode: 'payment'), así que
- * en runtime `onComplete` llega con la firma de pago:
- * `(plan_id, receipt_id, result)`, no la de setup (`session_id,
- * setup_intent_id, result)`. El tipo de la librería es una unión porque el
- * mismo componente sirve para las dos configuraciones; como acá SIEMPRE es
- * `mode: 'payment'`, se castea explícitamente en vez de manejar el caso que
- * nunca ocurre.
+ * ── `sessionId` vs `planId`, y por qué son mutuamente excluyentes ───────────
+ * `WhopCheckoutEmbedProps` es una unión discriminada: `{ planId: string } |
+ * { sessionId: string }`, nunca los dos juntos (verificado contra los tipos
+ * reales de `@whop/checkout` instalado). Pasar los dos a la vez compilaba acá
+ * porque el spread de JSX no siempre fuerza esa unión, pero en runtime Whop
+ * solo mira uno: si viene `sessionId`, ignora `planId`.
+ *
+ * Ahora este componente elige cuál mandar, `sessionId` gana si está presente
+ * (modo recuperación, con checkout configuration), y si no manda `planId`
+ * (checkout normal, sin configuration — ver BITACORA.md 2026-09-13). Con
+ * `sessionId` el `onComplete` llega con la firma de pago:
+ * `(plan_id, receipt_id, result)`; con `planId` directo, la MISMA firma —
+ * las dos son `mode: 'payment'`, la única que trae la firma de setup es
+ * `mode: 'setup'`, que este proyecto no usa.
  */
 export const CajaTarjeta = forwardRef<ControlesTarjeta, {
-  sessionId: string;
-  planId: string;
+  sessionId?: string | null;
+  planId?: string | null;
   email: string;
   environment: 'production' | 'sandbox';
   onReady: (listo: boolean) => void;
   onCompletado: (receiptId: string) => void;
   onError: (mensaje: string) => void;
 }>(function CajaTarjeta({ sessionId, planId, email, environment, onReady, onCompletado, onError }, ref) {
+  const idProps = sessionId ? { sessionId } : { planId: planId ?? '' };
   return (
     // Sin título propio arriba del iframe: el embed de Whop dibuja el suyo
     // ("Tarjeta de crédito" con el radio y el icono), y dos títulos seguidos se
@@ -41,8 +49,7 @@ export const CajaTarjeta = forwardRef<ControlesTarjeta, {
     <div className="whop-checkout-wrapper rounded-lg border-2 border-precio px-3.5 py-3">
       <WhopCheckoutEmbed
         ref={ref as never}
-        sessionId={sessionId}
-        planId={planId}
+        {...idProps}
         // Sin esto Whop no guarda el método de pago y no hay upsell
         // one-click: es la prop de la que depende el módulo entero.
         setupFutureUsage="off_session"
