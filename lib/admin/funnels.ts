@@ -225,15 +225,15 @@ export async function guardarFunnel(id: string | null, datos: EntradaFunnel): Pr
     if ((p.slug ?? '').trim() === '') {
       return { ok: false, error: 'datos_invalidos', detalle: `al paso "${p.nombre ?? '(sin nombre)'}" le falta el slug` };
     }
-    // Un delay negativo no tiene sentido y uno absurdamente largo (más de 10
-    // minutos) casi seguro es un error de tipeo — 600 y no un número más
+    // Un delay negativo no tiene sentido y uno absurdamente largo (más de 15
+    // minutos) casi seguro es un error de tipeo — 900 y no un número más
     // "redondo" porque un VSL real puede legítimamente durar varios minutos
     // antes de mostrar la oferta.
-    if (p.delay_segundos != null && (p.delay_segundos < 0 || p.delay_segundos > 600)) {
+    if (p.delay_segundos != null && (p.delay_segundos < 0 || p.delay_segundos > 900)) {
       return {
         ok: false,
         error: 'datos_invalidos',
-        detalle: `la demora del paso "${p.nombre ?? p.slug}" tiene que estar entre 0 y 600 segundos`,
+        detalle: `la demora del paso "${p.nombre ?? p.slug}" tiene que estar entre 0 y 900 segundos`,
       };
     }
   }

@@ -112,8 +112,8 @@ export function FormularioPaso({ paso, productos, permitirFront, onGuardar, onCa
     // no hay ningún botón que "aparezca" ahí. Vacío o inválido = sin demora,
     // no un error — es el estado normal de la mayoría de los pasos.
     const delayParseado = tipo === 'upsell' && delaySegundos.trim() !== '' ? Number(delaySegundos) : null;
-    if (delayParseado != null && (!Number.isFinite(delayParseado) || delayParseado < 0 || delayParseado > 600)) {
-      setError('La demora tiene que ser un número entre 0 y 600 segundos.');
+    if (delayParseado != null && (!Number.isFinite(delayParseado) || delayParseado < 0 || delayParseado > 900)) {
+      setError('La demora tiene que ser un número entre 0 y 900 segundos.');
       return;
     }
 
@@ -267,7 +267,7 @@ export function FormularioPaso({ paso, productos, permitirFront, onGuardar, onCa
             type="number"
             inputMode="numeric"
             min={0}
-            max={600}
+            max={900}
             step={1}
             value={delaySegundos}
             onChange={(e) => setDelaySegundos(e.target.value)}
