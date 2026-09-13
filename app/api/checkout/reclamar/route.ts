@@ -15,7 +15,6 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { aplicarEstadoDePago, encolarSalida, guardarMetodoDePago, registrarCobroDelFront } from '@/lib/cobros';
 import { q1 } from '@/lib/db';
-import { normalizarEmail } from '@/components/checkout/utils';
 import { resolverSiguienteUrl } from '@/lib/funnels';
 import { obtenerPago, WhopError } from '@/lib/whop';
 import type { Orden } from '@/lib/tipos';
@@ -115,55 +114,69 @@ export async function POST(req: Request): Promise<Response> {
   //
   // El tercero es nuevo (BITACORA.md 2026-09-13): el checkout normal ya no
   // pasa por una checkout configuration (ver `checkout/sesion/route.ts`), así
-  // que el pago no lleva ningún id que lo ate a esta orden en particular. Sin
-  // eso, la única señal disponible es que el EMAIL coincida y que el pago se
-  // haya creado DESPUÉS de que esta orden se creó, dentro de la ventana de
-  // validez del token (2 horas, ver `HORAS_VALIDEZ_TOKEN` en sesion/route.ts).
+  // que el pago no lleva ningún id que lo ate a esta orden en particular.
   //
-  // Es deliberadamente más débil que un id exacto: dos personas con el MISMO
-  // email comprando el MISMO producto en la MISMA ventana de un par de
-  // minutos podrían, en teoría, cruzarse. Se acepta ese riesgo residual
-  // porque: (a) el `receiptId` en sí ya prueba que ALGUIEN pagó ese monto
-  // exacto — no es un ataque de "inventar un pago", es a lo sumo "reclamar el
-  // pago de otro con el mismo email y casi el mismo instante", que además
-  // requiere conocer el `ordenId` (UUID de 128 bits, no viaja en la URL
-  // pública) y no gana nada: el "atacante" solo consigue que SU PROPIO pago
-  // active el token de ALGUIEN MÁS, no al revés. Y (b) es el trade-off
-  // explícito por el que se sacó la checkout configuration del camino
-  // normal — la alternativa (mantenerla) es la causa sospechada de que el
-  // upsell one-click nunca haya podido cobrar (diez hipótesis descartadas,
-  // ver BITACORA.md 2026-09-11).
+  // La primera versión de este camino usaba email + ventana. Se descartó
+  // (2026-09-13, mismo día, verificado con una compra real): un typo del
+  // comprador en el email — genuino, no un problema de normalización — hizo
+  // que el claim fallara aunque el pago fuera legítimo. Comparar strings
+  // exactos es demasiado frágil para depender de él solo.
+  //
+  // Ahora el criterio es: el pago está PAGADO, es del PLAN de esta página
+  // (`producto.whop_plan_id`, que es lo que de verdad identifica qué se
+  // compró — no depende de que el comprador haya tipeado nada bien), fue
+  // creado DESPUÉS de que esta orden se creó, dentro de la ventana de
+  // validez del token, y ESE PAGO todavía no fue reclamado por ninguna otra
+  // orden (evita que dos claims reusen el mismo pago).
+  //
+  // Es deliberadamente más débil que un id exacto, y se acepta el mismo
+  // riesgo residual documentado antes: el `receiptId` en sí ya prueba que
+  // ALGUIEN pagó ese monto exacto — esto no es un ataque de "inventar un
+  // pago", es a lo sumo "reclamar el pago de otro comprador del MISMO plan
+  // en la MISMA ventana de un par de minutos", que además requiere conocer
+  // el `ordenId` (UUID de 128 bits, no viaja en la URL pública) y no gana
+  // nada: el "atacante" solo consigue que SU PROPIO pago active el token de
+  // otra persona, no al revés.
   const ordenIdDelPago = pago.metadata?.orden_id;
   const porIdExacto =
     (typeof ordenIdDelPago === 'string' && ordenIdDelPago === orden.id) ||
     (orden.whop_checkout_config_id !== null && pago.checkout_configuration_id === orden.whop_checkout_config_id);
 
-  const emailDelPago = pago.user?.email ? normalizarEmail(pago.user.email) : null;
   const pagoEsPosteriorALaOrden = pago.paid_at
     ? new Date(pago.paid_at).getTime() >= orden.created_at.getTime()
     : false;
-  const porEmailYVentana =
-    !porIdExacto &&
-    orden.whop_checkout_config_id === null && // solo aplica al checkout normal, nunca a recuperación
-    emailDelPago !== null &&
-    orden.email !== null &&
-    emailDelPago === normalizarEmail(orden.email) &&
-    pagoEsPosteriorALaOrden &&
-    new Date() <= orden.token_expira_at;
 
-  const pertenece = porIdExacto || porEmailYVentana;
+  let porPlanYVentana = false;
+  if (!porIdExacto && orden.whop_checkout_config_id === null && pagoEsPosteriorALaOrden && new Date() <= orden.token_expira_at) {
+    const paginaDeLaOrden = await q1<{ whop_plan_id: string }>(
+      `select pr.whop_plan_id
+         from paginas pg join productos pr on pr.id = pg.producto_id
+        where pg.id = $1`,
+      [orden.pagina_id],
+    );
+    const mismoPlan = paginaDeLaOrden?.whop_plan_id === pago.plan?.id;
+    // Que ningún OTRO cobro ya registrado tenga este mismo whop_payment_id:
+    // evita que el mismo pago reclame dos órdenes distintas si dos personas
+    // comparten plan y ventana.
+    const yaReclamado = pago.id
+      ? await q1<{ id: string }>('select id from cobros where whop_payment_id = $1', [pago.id])
+      : null;
+    porPlanYVentana = mismoPlan && !yaReclamado;
+  }
+
+  const pertenece = porIdExacto || porPlanYVentana;
 
   if (!pertenece) {
     console.warn(
       `[checkout/reclamar] receiptId ajeno: orden=${orden.id} receiptId=${receiptId} ` +
         `metadata.orden_id=${String(ordenIdDelPago)} checkout_configuration_id=${pago.checkout_configuration_id} ` +
-        `email_pago=${emailDelPago} email_orden=${orden.email}`,
+        `plan_pago=${pago.plan?.id} paid_at=${pago.paid_at}`,
     );
     return NextResponse.json({ error: 'pagina_inexistente' }, { status: 403 });
   }
 
-  if (porEmailYVentana) {
-    console.log(`[checkout/reclamar] orden ${orden.id}: pertenencia resuelta por email+ventana (sin configuration)`);
+  if (porPlanYVentana) {
+    console.log(`[checkout/reclamar] orden ${orden.id}: pertenencia resuelta por plan+ventana (sin configuration)`);
   }
 
   // 3. Verificar que esté pago de verdad. Dar acceso por un pago `pending`
