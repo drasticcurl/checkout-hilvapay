@@ -19,6 +19,7 @@ import {
 } from '../../../../components/panel/ui';
 import { FormularioCredenciales } from './FormularioCredenciales';
 import { FormularioWebhook } from './FormularioWebhook';
+import { BotonProbarActual } from './BotonProbarActual';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -56,6 +57,13 @@ export default async function ConexionPage(): Promise<JSX.Element> {
       ) : null}
 
       <Tarjeta className="px-5 py-3">
+        <div className="flex items-start justify-between gap-3 py-2">
+          <p className="pt-1.5 text-[12px] text-tinta-2">
+            Prueba la key de acá abajo tal como está guardada, sin abrir el
+            formulario ni tocar nada.
+          </p>
+          <BotonProbarActual />
+        </div>
         <dl className="divide-y divide-panel-borde">
           <Dato etiqueta="De dónde salen">
             <Insignia tono={estado.fuente === 'base' ? 'acento' : 'neutro'}>
