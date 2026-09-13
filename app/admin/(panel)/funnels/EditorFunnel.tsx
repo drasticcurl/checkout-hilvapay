@@ -572,11 +572,12 @@ function SnippetDelPaso({
   guardado: boolean;
 }): JSX.Element | null {
   const [lenguaje, setLenguaje] = useState<'html' | 'jsx'>('jsx');
-  // `wallet` por default y no `guardada`, y no es una preferencia estética: el
-  // cobro off-session (`data-hilvana-upsell`) está bloqueado del lado de Whop y
-  // devuelve un 400 genérico sin crear ningún pago. Entregar ese botón por
-  // default sería entregar un botón que no cobra. El de wallet cubre Apple Pay,
-  // Google Pay Y tarjeta (por el diálogo de Whop Pay) con un solo elemento.
+  // `wallet` sigue siendo el default: es el único camino confirmado con
+  // tráfico real hasta ahora. El cobro off-session (`data-hilvana-upsell`)
+  // dejó de pasar por una checkout configuration en el front (BITACORA.md
+  // 2026-09-13, causa probable del 400 histórico), pero todavía no se
+  // verificó con una compra real de punta a punta — no se cambia el default
+  // hasta confirmarlo.
   const [modo, setModo] = useState<'wallet' | 'guardada'>('wallet');
   const [copiado, setCopiado] = useState(false);
 
@@ -673,10 +674,13 @@ function SnippetDelPaso({
           El wallet resuelve la autenticación del banco solo.
         </p>
       ) : (
-        <p className="text-[11px] leading-relaxed text-alerta">
-          Cobra contra la tarjeta que se guardó en el front, sin ninguna interacción. Hoy Whop rechaza
-          este cobro con un error genérico y no crea ningún pago —{' '}
-          <strong className="font-medium">no lo uses todavía</strong>. Está en el diagnóstico del repo.
+        <p className="text-[11px] leading-relaxed text-tinta-3">
+          Cobra contra la tarjeta que se guardó en el front, sin ninguna interacción. Hasta ahora Whop
+          rechazaba este cobro con un error genérico — el checkout del front dejó de pasar por una
+          checkout configuration (ver BITACORA.md 2026-09-13), que es lo que se identificó como la
+          causa probable. <strong className="font-medium text-tinta-2">Todavía no se confirmó con una
+          compra real de punta a punta</strong>: probalo primero en un funnel de prueba antes de
+          confiar en él para ventas reales.
         </p>
       )}
 
