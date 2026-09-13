@@ -57,17 +57,27 @@ export type FunnelConPasos = Funnel & { pasos: PasoDeFunnel[] };
 const COLS_FUNNEL = 'id, nombre, url_gracias, activo, created_at, updated_at';
 
 /**
- * Fila cruda de `paginas` + `productos`, tal como llega de una query con join.
- * Se ordena por `orden` y no por `created_at`: el orden del editor es un dato
- * explícito (columna `orden`), no el orden de creación, porque un paso se puede
- * reordenar sin que eso cambie el flujo (la migración 003 lo aclara: el orden
- * es solo visual).
+ * Fila cruda de `paginas` + `producto_planes` + `productos`, tal como llega de
+ * una query con join. Se ordena por `orden` y no por `created_at`: el orden
+ * del editor es un dato explícito (columna `orden`), no el orden de creación,
+ * porque un paso se puede reordenar sin que eso cambie el flujo (la migración
+ * 003 lo aclara: el orden es solo visual).
+ *
+ * Desde la migración 010, el precio de un paso se resuelve
+ * `paginas.producto_plan_id → producto_planes → productos` — nunca por
+ * `paginas.producto_id` directo (§3.4 del plan: el `producto_id` de una página
+ * puede no ser el ganador de su grupo tras la agrupación). El resultado
+ * aplanado (`PasoDeFunnel.producto`) NO cambia de forma: sigue siendo
+ * `{id, nombre, precio, moneda, imagen_url}` porque `EditorFunnel.tsx` y
+ * `FormularioPaso.tsx` (ownership de T05/T06, no de T01) siguen leyendo esa
+ * forma exacta.
  */
 type FilaPaso = {
   id: string;
   funnel_id: string;
   slug: string;
   producto_id: string;
+  producto_plan_id: string | null;
   tipo: 'front' | 'upsell';
   orden: number;
   nombre: string | null;
@@ -84,14 +94,29 @@ type FilaPaso = {
   prod_imagen_url: string | null;
 };
 
+/**
+ * `left join producto_planes/productos_plan` y no `inner`: una página vieja
+ * que todavía no tuviera `producto_plan_id` resuelto no puede desaparecer del
+ * editor (se vería como un funnel roto sin ningún paso), así que cuando el
+ * join por plan no resuelve nada, cae al join directo por `producto_id` de
+ * siempre — la migración 010 ya puebla `producto_plan_id` para toda página
+ * existente, pero esta doble resolución es la red de seguridad para lo que no
+ * cubrió esa migración de datos.
+ */
 const SELECT_PASOS = `
-  select pg.id, pg.funnel_id, pg.slug, pg.producto_id, pg.tipo, pg.orden, pg.nombre,
+  select pg.id, pg.funnel_id, pg.slug, pg.producto_id, pg.producto_plan_id, pg.tipo, pg.orden, pg.nombre,
          pg.url_externa, pg.permite_rechazo, pg.paso_aceptado_id, pg.paso_rechazado_id, pg.activo,
          pg.config,
-         pr.id as prod_id, pr.nombre as prod_nombre, pr.precio as prod_precio,
-         pr.moneda as prod_moneda, pr.imagen_url as prod_imagen_url
+         coalesce(pp.producto_id, pr_directo.id) as prod_id,
+         coalesce(pr_via_plan.nombre, pr_directo.nombre) as prod_nombre,
+         coalesce(pp.precio, pr_directo_legacy.precio) as prod_precio,
+         coalesce(pp.moneda, pr_directo_legacy.moneda) as prod_moneda,
+         coalesce(pr_via_plan.imagen_url, pr_directo.imagen_url) as prod_imagen_url
     from paginas pg
-    join productos pr on pr.id = pg.producto_id
+    left join producto_planes pp on pp.id = pg.producto_plan_id
+    left join productos pr_via_plan on pr_via_plan.id = pp.producto_id
+    left join productos pr_directo on pr_directo.id = pg.producto_id
+    left join producto_planes pr_directo_legacy on pr_directo_legacy.producto_id = pr_directo.id and pr_directo_legacy.es_default
 `;
 
 function filaAPaso(f: FilaPaso): PasoDeFunnel {
@@ -275,6 +300,16 @@ export async function guardarFunnel(id: string | null, datos: EntradaFunnel): Pr
       // Primera pasada: alta o update de cada paso, SIN las flechas todavía —
       // un paso nuevo no tiene id hasta este insert, y las flechas pueden
       // apuntar a otro paso nuevo de la misma lista.
+      //
+      // `producto_plan_id` se resuelve por subquery a la variante DEFAULT del
+      // producto que llegó en `p.producto_id` — el formulario del editor
+      // (`FormularioPaso.tsx`, T04/T05) sigue mandando `producto_id`, no
+      // `producto_plan_id` directo, así que acá es donde se traduce uno al
+      // otro. Si el producto no tiene ninguna variante default (no debería
+      // pasar: el índice `producto_planes_un_default_idx` más la migración 010
+      // garantizan una por producto), la subquery da NULL y el paso queda sin
+      // `producto_plan_id` — visible en la base, no un cobro silenciosamente
+      // mal resuelto.
       const idsPorIndice: string[] = [];
       for (let i = 0; i < datos.pasos.length; i++) {
         const p = datos.pasos[i];
@@ -287,6 +322,7 @@ export async function guardarFunnel(id: string | null, datos: EntradaFunnel): Pr
                     url_externa = $6, permite_rechazo = $7, funnel_id = $8,
                     config = jsonb_set(coalesce(config, '{}'::jsonb), '{delaySegundos}',
                       $9::jsonb, true),
+                    producto_plan_id = (select id from producto_planes where producto_id = $2 and es_default),
                     updated_at = now()
               where id = $10`,
             [
@@ -306,8 +342,9 @@ export async function guardarFunnel(id: string | null, datos: EntradaFunnel): Pr
         } else {
           const fila = await c.query<{ id: string }>(
             `insert into paginas (slug, producto_id, tipo, orden, nombre, url_externa,
-                                  permite_rechazo, funnel_id, config, activo)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, false)
+                                  permite_rechazo, funnel_id, config, activo, producto_plan_id)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, false,
+                     (select id from producto_planes where producto_id = $2 and es_default))
              returning id`,
             [
               slug,

@@ -2,11 +2,22 @@
  * Queries de `paginas`: los links de pago. Incluye la normalización de slug,
  * que es lo único no trivial de este archivo — un slug con una mayúscula o un
  * espacio genera un link que da 404 y nadie entiende por qué.
+ *
+ * Desde la migración 010, `paginas` tiene también `producto_plan_id` (qué
+ * VARIANTE de precio cobra esa página) además de `producto_id` (que sigue
+ * existiendo, not null, §3.2 del plan). `listarPaginasConProductoPlan` es la
+ * query nueva que resuelve por esa columna — es la que consumen T02/T04/T05.
+ * `listarPaginasConProducto` (la vieja, vía `producto_id` → `productos`) se
+ * mantiene con su forma de siempre porque hoy la consume
+ * `app/api/admin/paginas/route.ts`, que T01 tiene prohibido tocar (esa
+ * pantalla entera es ownership de T03, que la borra — hasta que eso pase,
+ * tiene que seguir compilando).
  */
 import { q, q1 } from '../db';
-import type { ConfigPagina, Pagina, PaginaConProducto } from '../tipos';
+import type { ConfigPagina, Pagina, PaginaConProducto, PaginaConProductoPlan } from '../tipos';
+import { normalizarSlug } from './slug';
 
-/** Lo que llega del formulario de alta/edición de un link de pago. */
+/** Lo que llega del formulario de alta/edición de un link de pago (forma vieja, vía producto_id). */
 export type EntradaPagina = {
   slug: string;
   producto_id: string;
@@ -32,18 +43,14 @@ export type EntradaPagina = {
  * `'Agua De Arroz 1'` → `'agua-de-arroz-1'`
  * `'  UPSELL_2  '`    → `'upsell-2'`
  * `'áéí'`             → `'aei'`
+ *
+ * La implementación real vive en `lib/admin/slug.ts` (puro, sin `pg`) — se
+ * re-exporta acá para no romper ningún import existente (importado arriba,
+ * junto al resto de los imports del archivo, para que las funciones de este
+ * módulo también puedan usarla). Ver el comentario de cabecera de
+ * `lib/admin/slug.ts` para el motivo del movimiento.
  */
-export function normalizarSlug(input: string): string {
-  return input
-    .trim()
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '') // quita los diacríticos, deja la letra base
-    .replace(/[\s_]+/g, '-') // espacios y guion bajo → guion medio
-    .replace(/[^a-z0-9-]/g, '') // descarta todo lo que no sea a-z0-9-
-    .replace(/-+/g, '-') // colapsa guiones repetidos
-    .replace(/^-+|-+$/g, ''); // recorta guiones al borde
-}
+export { normalizarSlug } from './slug';
 
 const COLS = `id, slug, producto_id, tipo, url_exito, url_rechazo, config, activo,
        created_at, updated_at`;
@@ -101,6 +108,70 @@ export async function listarPaginasConProducto(): Promise<PaginaConProducto[]> {
           : String((f.producto as Record<string, unknown>).precio_anclaje),
     },
   })) as unknown as PaginaConProducto[];
+}
+
+/**
+ * La página con su `producto_plan` resuelto (a través de `producto_plan_id`,
+ * no de `producto_id`) — el tipo `PaginaConProductoPlan` de §4. Es lo que
+ * consumen T02/T04/T05: reemplaza a `listarPaginasConProducto` en todo código
+ * NUEVO. La resolución en dos pasos (`paginas.producto_plan_id →
+ * producto_planes → productos`) es la misma que describe §3.4 del plan — nunca
+ * se resuelve por `producto_id` directo, porque una página puede cobrar una
+ * variante que no es la del producto "ganador" de su grupo tras la migración.
+ *
+ * Una página sin `producto_plan_id` (todavía no debería existir tras la
+ * migración 010 — la fase B la resuelve para todas las filas existentes, y
+ * toda página nueva la exige desde el editor) queda afuera del resultado: un
+ * INNER JOIN y no LEFT, porque una página sin variante resuelta no es cobrable
+ * y mostrarla sin precio es peor que no mostrarla.
+ */
+export async function listarPaginasConProductoPlan(): Promise<PaginaConProductoPlan[]> {
+  const filas = await q<{
+    id: string;
+    slug: string;
+    tipo: 'front' | 'upsell';
+    url_exito: string | null;
+    url_rechazo: string | null;
+    config: ConfigPagina;
+    activo: boolean;
+    created_at: Date;
+    updated_at: Date;
+    producto_plan: unknown;
+  }>(
+    `select pg.id, pg.slug, pg.tipo, pg.url_exito, pg.url_rechazo, pg.config, pg.activo,
+            pg.created_at, pg.updated_at,
+            json_build_object(
+              'id', pp.id, 'producto_id', pp.producto_id, 'whop_plan_id', pp.whop_plan_id,
+              'whop_nombre_soft', pp.whop_nombre_soft, 'etiqueta', pp.etiqueta,
+              'precio', pp.precio, 'moneda', pp.moneda, 'precio_anclaje', pp.precio_anclaje,
+              'es_default', pp.es_default, 'activo', pp.activo,
+              'created_at', pp.created_at, 'updated_at', pp.updated_at,
+              'producto', json_build_object(
+                'id', pr.id, 'nombre', pr.nombre, 'whop_product_id', pr.whop_product_id,
+                'imagen_url', pr.imagen_url, 'descripcion', pr.descripcion, 'activo', pr.activo,
+                'created_at', pr.created_at, 'updated_at', pr.updated_at
+              )
+            ) as producto_plan
+       from paginas pg
+       join producto_planes pp on pp.id = pg.producto_plan_id
+       join productos pr on pr.id = pp.producto_id
+      order by pg.created_at desc`,
+  );
+  // Mismo motivo que en listarPaginasConProducto: numeric dentro de un
+  // json_build_object serializa como number, no string. Se corrige acá para
+  // no romper la regla de lib/tipos.ts de que precio/precio_anclaje son
+  // siempre string.
+  return filas.map((f) => {
+    const pp = f.producto_plan as Record<string, unknown>;
+    return {
+      ...f,
+      producto_plan: {
+        ...pp,
+        precio: String(pp.precio),
+        precio_anclaje: pp.precio_anclaje == null ? null : String(pp.precio_anclaje),
+      },
+    };
+  }) as unknown as PaginaConProductoPlan[];
 }
 
 /** Alta de link de pago. Nace inactivo (D14): el slug se normaliza antes de guardar. */

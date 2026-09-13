@@ -3,6 +3,10 @@
 import { useState } from 'react';
 import { Dialogo } from '@/components/panel/Dialogo';
 import { Boton, Campo, Interruptor, OpcionRadio, SinDato, clasesControl, unir } from '@/components/panel/ui';
+// [T05] el slug de un upsell ya no se tipea: se deriva del nombre del paso y
+// se le agrega un sufijo anticolisión al guardar (D4/D3 del plan). Import de
+// la función pura que declaró T01 — no se toca `integracion.ts`.
+import { generarSlugConSufijo } from '../../../../lib/admin/integracion';
 
 type ProductoSelector = { id: string; nombre: string; precio: string; moneda: string };
 
@@ -66,14 +70,12 @@ export function FormularioPaso({ paso, productos, permitirFront, onGuardar, onCa
   const [nombre, setNombre] = useState(paso?.nombre ?? '');
   const [productoId, setProductoId] = useState(paso?.producto_id ?? productos[0]?.id ?? '');
   const [urlExterna, setUrlExterna] = useState(paso?.url_externa ?? '');
-  const [slug, setSlug] = useState(paso?.slug ?? '');
   const [delaySegundos, setDelaySegundos] = useState(
     paso?.delay_segundos != null ? String(paso.delay_segundos) : '',
   );
   const [error, setError] = useState<string | null>(null);
 
   const producto = productos.find((p) => p.id === productoId) ?? null;
-  const slugNormalizado = previsualizarSlug(slug);
   const base = typeof window !== 'undefined' ? window.location.origin : '';
 
   // El paso `front` no pregunta nada más que el producto. Todo lo demás no
@@ -97,13 +99,19 @@ export function FormularioPaso({ paso, productos, permitirFront, onGuardar, onCa
       setError('El nombre de identificación es muy corto.');
       return;
     }
-    // En el front el slug sale del nombre del producto; en un upsell se escribe.
-    const slugFinal = esFront ? previsualizarSlug(producto?.nombre ?? '') : slugNormalizado;
+    // [T05] En el front el slug sale del nombre del producto (sin tocar, ya
+    // existía). En un upsell YA NO se tipea (D4): si el paso es nuevo se
+    // genera con `generarSlugConSufijo` a partir del nombre del paso, con
+    // sufijo anticolisión; si el paso ya existía (`paso?.slug`), se conserva
+    // el que tiene — un paso en edición no regenera su slug.
+    const slugFinal = esFront
+      ? previsualizarSlug(producto?.nombre ?? '')
+      : paso?.slug ?? generarSlugConSufijo(nombre.trim());
     if (!slugFinal) {
       setError(
         esFront
           ? 'No se pudo derivar el slug del nombre del producto. Cambiale el nombre en Productos.'
-          : 'El slug queda vacío. Probá con letras y números.',
+          : 'No se pudo derivar el slug del nombre del paso. Probá con letras y números.',
       );
       return;
     }
@@ -285,29 +293,11 @@ export function FormularioPaso({ paso, productos, permitirFront, onGuardar, onCa
           </span>
           , derivado del nombre del producto. Si querés otro, cambiale el nombre en Productos.
         </p>
-      ) : (
-        <Campo
-          etiqueta="Slug"
-          htmlFor="slug-paso"
-          ayuda={
-            <>
-              Es lo que el botón del funnel pone en{' '}
-              <span className="font-mono text-tinta-2">data-hilvana-upsell</span>:{' '}
-              <span className="font-mono text-tinta-2">
-                {base}/pagos/{slugNormalizado || '…'}
-              </span>
-            </>
-          }
-        >
-          <input
-            id="slug-paso"
-            value={slug}
-            onChange={(e) => setSlug(e.target.value)}
-            placeholder="upsell-1"
-            className={clasesControl('font-mono')}
-          />
-        </Campo>
-      )}
+      ) : null}
+      {/* [T05] hasta acá: el bloque de arriba (la nota del front) no cambió.
+          El campo de texto `slug-paso` que existía para un upsell se retiró
+          entero (D4) — el slug ya no se ve ni se edita en este formulario, se
+          genera solo con `generarSlugConSufijo` al guardar. */}
 
       {error ? (
         <p role="alert" className="text-[13px] font-medium text-peligro">

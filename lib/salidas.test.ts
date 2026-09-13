@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { armarPayloadIngest, centavos, OMITIDA_SIN_ATRIBUCION, proximoIntento } from './salidas';
-import type { Cobro, Orden, Pagina, Producto } from './tipos';
+import type { Cobro, Orden, Pagina } from './tipos';
 
 // ── centavos() ────────────────────────────────────────────────────────────────
 
@@ -132,21 +132,19 @@ function basePagina(overrides: Partial<Pagina> = {}): Pagina {
   };
 }
 
-function baseProducto(overrides: Partial<Producto> = {}): Producto {
+/**
+ * El tipo reducido que espera `FilaCobroParaSalida.producto` desde que
+ * `salidas.ts` dejó de construir un `Producto` completo (T01 de
+ * `panel-catalogo-funnels`: `Producto` ya no tiene `precio`/`whop_plan_id`, y
+ * el cron de salidas solo necesitaba `nombre` y `moneda` de todos modos).
+ */
+function baseProducto(overrides: Partial<{ nombre: string; moneda: string }> = {}): {
+  nombre: string;
+  moneda: string;
+} {
   return {
-    id: 'producto-1',
     nombre: 'App agua de arroz',
-    whop_plan_id: 'plan_1',
-    whop_product_id: 'prod_1',
-    whop_nombre_soft: null,
-    precio: '9.90',
     moneda: 'usd',
-    precio_anclaje: null,
-    imagen_url: null,
-    descripcion: null,
-    activo: true,
-    created_at: new Date(),
-    updated_at: new Date(),
     ...overrides,
   };
 }

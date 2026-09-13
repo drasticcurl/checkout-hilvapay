@@ -1,135 +1,155 @@
 /**
- * `/admin` — la lista de links de pago. Es la pantalla de inicio porque es lo
- * que se mira todos los días: slug, producto, precio, estado, y el switch para
- * encender o apagar el cobro sin redeploy.
+ * `/admin` — el Home del panel. Deja de ser el listado de links de pago (esa
+ * sección se elimina, ver `tasks/panel-catalogo-funnels/T03-nav-y-home-sin-links.md`):
+ * el slug/link de cada variante de precio ahora se ve y se edita desde la ficha
+ * de "Productos" (T02).
+ *
+ * Esto es un resumen mínimo, NO el dashboard de ventas — el usuario confirmó
+ * que eso es otro módulo, más adelante (ver `00-PLAN-PANEL-CATALOGO-FUNNELS.md`
+ * §0 punto 3 y P-01 de §10). Dos conteos y tres accesos rápidos, nada de
+ * métricas de cobros ni gráficos.
  */
 import Link from 'next/link';
-import { LinkSimple, Plus } from '@phosphor-icons/react/ssr';
-import { listarPaginasConProducto } from '../../../lib/admin/paginas';
 import {
-  Codigo,
-  EncabezadoPantalla,
-  EstadoVacio,
-  EstadoVivo,
-  Insignia,
-  TablaEnvoltorio,
-  Td,
-  Th,
-  Tr,
-  clasesBoton,
-} from '../../../components/panel/ui';
-import { CopiarUrlButton } from './CopiarUrlButton';
-import { SwitchActivo } from './SwitchActivo';
+  ArrowRight,
+  Package,
+  Storefront,
+  TreeStructure,
+} from '@phosphor-icons/react/ssr';
+import { listarProductosConPlanes } from '../../../lib/admin/productos';
+import { listarFunnelsConPasos } from '../../../lib/admin/funnels';
+import { EncabezadoPantalla, Insignia, Tarjeta, unir } from '../../../components/panel/ui';
 
 export const dynamic = 'force-dynamic';
 
-function formatearPrecio(precio: string, moneda: string): string {
-  return `${Number(precio).toFixed(2)} ${moneda.toUpperCase()}`;
-}
+type Acceso = {
+  href: string;
+  titulo: string;
+  descripcion: string;
+  Icono: typeof Package;
+};
+
+const ACCESOS: Acceso[] = [
+  {
+    href: '/admin/productos',
+    titulo: 'Productos',
+    descripcion: 'Nombre, foto y variantes de precio de cada producto, con su link de pago.',
+    Icono: Package,
+  },
+  {
+    href: '/admin/funnels',
+    titulo: 'Funnels',
+    descripcion: 'El front y los upsells encadenados que se ofrecen después de cada compra.',
+    Icono: TreeStructure,
+  },
+  {
+    href: '/admin/catalogo',
+    titulo: 'Catálogo',
+    descripcion: 'Los productos y planes que ya existen en Whop, para vincular uno nuevo.',
+    Icono: Storefront,
+  },
+];
 
 /**
- * El único número que importa de un vistazo en un panel de cobros es cuántos
- * links están cobrando ahora mismo: es el radio de acción si algo sale mal. Va
- * como frase y no como tarjeta de métrica — la tabla de abajo ya tiene el detalle.
+ * Tarjeta de conteo simple: total y cuántos de esos están activos. Es a
+ * propósito solo un número — el detalle de cada fila vive en su propia
+ * pantalla, no acá.
  */
-function resumen(total: number, activos: number): string {
-  if (total === 0) return 'Todavía no hay links de pago creados.';
-  if (activos === 0) {
-    return `${total} ${total === 1 ? 'link' : 'links'}, ninguno cobrando. Todo nace apagado a propósito.`;
-  }
-  return `${activos} de ${total} ${total === 1 ? 'link' : 'links'} ${
-    activos === 1 ? 'está cobrando' : 'están cobrando'
-  } tarjetas ahora mismo.`;
+function TarjetaConteo({
+  titulo,
+  activos,
+  total,
+  singular,
+  plural,
+}: {
+  titulo: string;
+  activos: number;
+  total: number;
+  singular: string;
+  plural: string;
+}): JSX.Element {
+  return (
+    <Tarjeta className="px-5 py-4">
+      <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-tinta-3">{titulo}</p>
+      <div className="mt-2 flex items-baseline gap-2">
+        <span className="text-2xl font-semibold tracking-[-0.01em] text-tinta">{activos}</span>
+        <span className="text-sm text-tinta-3">
+          de {total} {total === 1 ? singular : plural}
+        </span>
+      </div>
+      <div className="mt-2">
+        <Insignia tono={activos === 0 ? 'neutro' : 'vivo'}>
+          {activos === 0 ? 'Ninguno activo' : activos === total ? 'Todos activos' : 'Activos ahora'}
+        </Insignia>
+      </div>
+    </Tarjeta>
+  );
+}
+
+function TarjetaAcceso({ href, titulo, descripcion, Icono }: Acceso): JSX.Element {
+  return (
+    <Link
+      href={href}
+      className={unir(
+        'group flex items-start gap-3.5 rounded-card border border-panel-borde bg-panel-sup px-5 py-4',
+        'shadow-panel transition-colors hover:border-panel-bordeFuerte hover:bg-panel-sup2',
+      )}
+    >
+      <div className="mt-0.5 shrink-0 rounded-ctrl bg-acento-suave p-2 text-acento-oscuro">
+        <Icono size={18} weight="regular" aria-hidden="true" />
+      </div>
+      <div className="min-w-0 flex-1 space-y-1">
+        <div className="flex items-center gap-1.5">
+          <h3 className="text-sm font-semibold text-tinta">{titulo}</h3>
+          <ArrowRight
+            size={13}
+            className="text-tinta-3 opacity-0 transition-opacity group-hover:opacity-100"
+            aria-hidden="true"
+          />
+        </div>
+        <p className="text-[13px] leading-relaxed text-tinta-2">{descripcion}</p>
+      </div>
+    </Link>
+  );
 }
 
 export default async function AdminHomePage(): Promise<JSX.Element> {
-  const paginas = await listarPaginasConProducto();
-  const base = process.env.NEXT_PUBLIC_BASE_URL ?? '';
-  const activos = paginas.filter((p) => p.activo).length;
+  const [productos, funnels] = await Promise.all([listarProductosConPlanes(), listarFunnelsConPasos()]);
+  const productosActivos = productos.filter((p) => p.activo).length;
+  const funnelsActivos = funnels.filter((f) => f.activo).length;
 
   return (
     <div className="space-y-6">
       <EncabezadoPantalla
-        titulo="Links de pago"
-        descripcion={resumen(paginas.length, activos)}
-        // Con la lista vacía el botón vive en el estado vacío y no acá: dos
-        // botones que hacen lo mismo en la misma pantalla obligan a leer los dos
-        // para descubrir que da igual cuál se aprieta.
-        acciones={
-          paginas.length === 0 ? undefined : (
-            <Link href="/admin/paginas/nuevo" className={clasesBoton('primario', 'md')}>
-              <Plus size={15} weight="bold" aria-hidden="true" />
-              Nuevo link
-            </Link>
-          )
-        }
+        titulo="Panel"
+        descripcion="Resumen general. El detalle de cada cosa vive en su propia sección."
       />
 
-      {paginas.length === 0 ? (
-        <EstadoVacio
-          icono={<LinkSimple size={20} aria-hidden="true" />}
-          titulo="Ningún link de pago todavía"
-          descripcion="Un link asocia un producto de Whop a una URL propia como /pagos/agua-de-arroz. Es lo que se pega en el funnel."
-          accion={
-            <Link href="/admin/paginas/nuevo" className={clasesBoton('primario', 'md')}>
-              <Plus size={15} weight="bold" aria-hidden="true" />
-              Crear el primero
-            </Link>
-          }
+      <div className="grid gap-4 sm:grid-cols-2">
+        <TarjetaConteo
+          titulo="Productos"
+          activos={productosActivos}
+          total={productos.length}
+          singular="producto"
+          plural="productos"
         />
-      ) : (
-        <TablaEnvoltorio>
-          <thead>
-            <tr>
-              <Th>Link</Th>
-              <Th>Producto</Th>
-              <Th>Tipo</Th>
-              <Th numerica>Precio</Th>
-              <Th>Estado</Th>
-              <Th className="text-right">Editar</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {paginas.map((p) => {
-              const url = base ? `${base}/pagos/${p.slug}` : `/pagos/${p.slug}`;
-              return (
-                <Tr key={p.id}>
-                  <Td>
-                    <div className="flex items-center gap-1.5">
-                      <Codigo className="max-w-[22rem] truncate">{url}</Codigo>
-                      <CopiarUrlButton url={url} />
-                    </div>
-                  </Td>
-                  <Td className="max-w-[18rem] truncate font-medium">{p.producto.nombre}</Td>
-                  <Td>
-                    <Insignia tono={p.tipo === 'front' ? 'acento' : 'neutro'}>{p.tipo}</Insignia>
-                  </Td>
-                  <Td numerica className="whitespace-nowrap text-tinta-2">
-                    {formatearPrecio(p.producto.precio, p.producto.moneda)}
-                  </Td>
-                  <Td>
-                    <div className="flex items-center gap-3">
-                      <SwitchActivo
-                        id={p.id}
-                        activo={p.activo}
-                        endpoint="/api/admin/paginas"
-                        etiqueta={`/pagos/${p.slug}`}
-                        mensajeConfirmacion={`A partir de ahora /pagos/${p.slug} empieza a cobrar tarjetas reales.`}
-                      />
-                      <EstadoVivo activo={p.activo} />
-                    </div>
-                  </Td>
-                  <Td className="text-right">
-                    <Link href={`/admin/paginas/${p.id}`} className={clasesBoton('secundario', 'sm')}>
-                      Editar
-                    </Link>
-                  </Td>
-                </Tr>
-              );
-            })}
-          </tbody>
-        </TablaEnvoltorio>
-      )}
+        <TarjetaConteo
+          titulo="Funnels"
+          activos={funnelsActivos}
+          total={funnels.length}
+          singular="funnel"
+          plural="funnels"
+        />
+      </div>
+
+      <div className="space-y-3">
+        <h2 className="text-sm font-semibold text-tinta">Accesos rápidos</h2>
+        <div className="grid gap-3 sm:grid-cols-3">
+          {ACCESOS.map((acceso) => (
+            <TarjetaAcceso key={acceso.href} {...acceso} />
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

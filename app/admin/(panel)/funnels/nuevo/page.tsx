@@ -1,17 +1,17 @@
 /**
- * `/admin/funnels/nuevo` — arranca el editor sin funnel todavía. El primer
- * guardado crea la fila; hasta entonces todo vive en el estado del cliente.
+ * `/admin/funnels/nuevo` — antes de dejar ver el editor completo, pide el
+ * producto principal y la página de gracias (D8 del plan
+ * panel-catalogo-funnels: no se puede agregar el segundo paso sin las dos
+ * cosas). El wizard vive en `AsistenteFunnel` (client component, estado local)
+ * porque esta pantalla sigue siendo server component para el fetch de
+ * productos — Next no mezcla las dos cosas en el mismo archivo.
  */
 import Link from 'next/link';
 import { Package } from '@phosphor-icons/react/ssr';
 import { productosParaSelector } from '../../../../../lib/admin/funnels';
-import {
-  EncabezadoPantalla,
-  EstadoVacio,
-  clasesBoton,
-} from '../../../../../components/panel/ui';
+import { EncabezadoPantalla, EstadoVacio, clasesBoton } from '../../../../../components/panel/ui';
 import { Volver } from '../../../../../components/panel/Volver';
-import { EditorFunnel } from '../EditorFunnel';
+import { AsistenteFunnel } from './AsistenteFunnel';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -38,7 +38,7 @@ export default async function NuevoFunnelPage(): Promise<JSX.Element> {
           }
         />
       ) : (
-        <EditorFunnel funnel={null} productos={productos} />
+        <AsistenteFunnel productos={productos} />
       )}
     </div>
   );

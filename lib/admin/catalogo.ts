@@ -74,11 +74,14 @@ export async function catalogoWhop(): Promise<Catalogo> {
 
   // Lo que ya está vinculado, con sus links. Un LEFT JOIN y no un INNER: un
   // producto vinculado sin ningún link de pago todavía es un estado normal
-  // (acabás de vincularlo) y tiene que aparecer como vinculado igual.
+  // (acabás de vincularlo) y tiene que aparecer como vinculado igual. Desde la
+  // migración 010, `whop_plan_id` vive en `producto_planes`, no en `productos`
+  // — el join intermedio es lo que reemplaza al acceso directo de antes.
   const filas = await q<FilaVinculo>(
-    `select pr.id as producto_id, pr.whop_plan_id, pr.nombre, pg.slug, pg.activo
+    `select pr.id as producto_id, pp.whop_plan_id, pr.nombre, pg.slug, pg.activo
        from productos pr
-       left join paginas pg on pg.producto_id = pr.id
+       join producto_planes pp on pp.producto_id = pr.id
+       left join paginas pg on pg.producto_plan_id = pp.id
       order by pr.created_at desc, pg.slug`,
   );
 
@@ -150,17 +153,25 @@ export type EntradaVinculo = {
 };
 
 export type ResultadoVinculo =
-  | { ok: true; producto_id: string; pagina_id: string; slug: string }
+  | { ok: true; producto_id: string; producto_plan_id: string; pagina_id: string; slug: string; fusionado: boolean }
   | { ok: false; error: 'slug_ocupado' | 'plan_ya_vinculado' | 'datos_invalidos'; detalle?: string };
 
 /**
- * Vincula un plan de Whop a un link de pago nuevo: crea el `producto` y su
- * `pagina` **en una sola transacción**.
+ * Vincula un plan de Whop a un link de pago nuevo.
  *
- * Por qué en una transacción y no dos POST desde el browser: si el segundo
- * fallara, quedaría un producto sin link, invisible en la pantalla de links y
- * ocupando el índice único de `whop_plan_id` — con lo cual el segundo intento de
- * vincular ese mismo plan fallaría con "ya vinculado" señalando algo que el
+ * Desde la migración 010 (D1 del plan), esto ya no es siempre "crear un
+ * producto nuevo": si el `whop_product_id` del plan YA está vinculado a un
+ * producto local (mismo access_pass, otro plan), la variante nueva se agrega a
+ * ESE producto vía `agregarPlanAProducto` (`fusionado: true`) en vez de crear
+ * un producto hermano sin relación — que es exactamente el bug que reportó el
+ * usuario. Si no hay ningún producto local con ese `whop_product_id`, se
+ * comporta como siempre: producto nuevo + su primera variante
+ * (`fusionado: false`).
+ *
+ * Todo en una sola transacción: si el segundo insert (la página) fallara,
+ * quedaría un producto o una variante sin link, invisible en la pantalla y
+ * ocupando el índice único de `whop_plan_id` — con lo cual el segundo intento
+ * de vincular ese mismo plan fallaría con "ya vinculado" señalando algo que el
  * usuario no ve. Basura difícil de diagnosticar por un error de red.
  *
  * Nace **inactivo** (D14 del plan): vincular no es encender.
@@ -180,37 +191,77 @@ export async function vincularPlan(entrada: EntradaVinculo): Promise<ResultadoVi
   const ocupado = await q1<{ id: string }>('select id from paginas where slug = $1', [slug]);
   if (ocupado) return { ok: false, error: 'slug_ocupado' };
 
-  const yaVinculado = await q1<{ id: string }>('select id from productos where whop_plan_id = $1', [
-    entrada.whop_plan_id,
-  ]);
+  const yaVinculado = await q1<{ id: string }>(
+    'select id from producto_planes where whop_plan_id = $1',
+    [entrada.whop_plan_id],
+  );
   if (yaVinculado) return { ok: false, error: 'plan_ya_vinculado' };
+
+  // Grupo existente por access_pass: si hay uno, la variante nueva se fusiona
+  // ahí (D1). `whop_product_id` puede venir null (vínculo a mano, sin
+  // catálogo) — en ese caso no hay nada que buscar, es su propio grupo.
+  const productoDelGrupo = entrada.whop_product_id
+    ? await q1<{ id: string }>('select id from productos where whop_product_id = $1', [
+        entrada.whop_product_id,
+      ])
+    : null;
 
   try {
     return await tx(async (c) => {
-      const prod = await c.query<{ id: string }>(
-        `insert into productos (nombre, whop_plan_id, whop_product_id, whop_nombre_soft,
-                                precio, moneda, activo)
-         values ($1, $2, $3, $4, $5, $6, false)
-         returning id`,
-        [
-          nombre,
-          entrada.whop_plan_id,
-          entrada.whop_product_id,
-          entrada.whop_nombre_soft,
-          precio.toFixed(2),
-          entrada.moneda.toLowerCase(),
-        ],
-      );
-      const productoId = prod.rows[0].id;
+      let productoId: string;
+      let productoPlanId: string;
+      const fusionado = Boolean(productoDelGrupo);
+
+      if (productoDelGrupo) {
+        productoId = productoDelGrupo.id;
+        const plan = await c.query<{ id: string }>(
+          `insert into producto_planes (producto_id, whop_plan_id, whop_nombre_soft, etiqueta, precio,
+                                        moneda, precio_anclaje, es_default, activo)
+           values ($1, $2, $3, 'Variante', $4, $5, null, false, false)
+           returning id`,
+          [
+            productoId,
+            entrada.whop_plan_id,
+            entrada.whop_nombre_soft,
+            precio.toFixed(2),
+            entrada.moneda.toLowerCase(),
+          ],
+        );
+        productoPlanId = plan.rows[0].id;
+      } else {
+        const prod = await c.query<{ id: string }>(
+          `insert into productos (nombre, whop_product_id, activo)
+           values ($1, $2, false)
+           returning id`,
+          [nombre, entrada.whop_product_id],
+        );
+        productoId = prod.rows[0].id;
+
+        const plan = await c.query<{ id: string }>(
+          `insert into producto_planes (producto_id, whop_plan_id, whop_nombre_soft, etiqueta, precio,
+                                        moneda, precio_anclaje, es_default, activo)
+           values ($1, $2, $3, 'Precio completo', $4, $5, null, true, false)
+           returning id`,
+          [productoId, entrada.whop_plan_id, entrada.whop_nombre_soft, precio.toFixed(2), entrada.moneda.toLowerCase()],
+        );
+        productoPlanId = plan.rows[0].id;
+      }
 
       const pag = await c.query<{ id: string }>(
-        `insert into paginas (slug, producto_id, tipo, config, activo)
-         values ($1, $2, $3, '{}'::jsonb, false)
+        `insert into paginas (slug, producto_id, producto_plan_id, tipo, config, activo)
+         values ($1, $2, $3, $4, '{}'::jsonb, false)
          returning id`,
-        [slug, productoId, entrada.tipo],
+        [slug, productoId, productoPlanId, entrada.tipo],
       );
 
-      return { ok: true as const, producto_id: productoId, pagina_id: pag.rows[0].id, slug };
+      return {
+        ok: true as const,
+        producto_id: productoId,
+        producto_plan_id: productoPlanId,
+        pagina_id: pag.rows[0].id,
+        slug,
+        fusionado,
+      };
     });
   } catch (err) {
     // Carrera con otra pestaña: los chequeos de arriba pasaron y el índice único
@@ -218,7 +269,7 @@ export async function vincularPlan(entrada: EntradaVinculo): Promise<ResultadoVi
     // la pantalla diga lo mismo en los dos casos.
     const mensaje = err instanceof Error ? err.message : String(err);
     if (/paginas_slug_idx/.test(mensaje)) return { ok: false, error: 'slug_ocupado' };
-    if (/productos_whop_plan_idx/.test(mensaje)) return { ok: false, error: 'plan_ya_vinculado' };
+    if (/producto_planes_whop_plan_idx/.test(mensaje)) return { ok: false, error: 'plan_ya_vinculado' };
     throw err;
   }
 }

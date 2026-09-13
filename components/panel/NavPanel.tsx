@@ -7,7 +7,6 @@ import {
   ChartLineUp,
   Fingerprint,
   GraduationCap,
-  LinkSimple,
   Package,
   Receipt,
   Storefront,
@@ -39,7 +38,6 @@ const SECCIONES = [
   // recién y no sabe por dónde empezar. El resto de las secciones asume que ya
   // sabés qué es un funnel o un origen; esta no.
   { href: '/admin/tutorial', label: 'Tutorial', Icono: GraduationCap },
-  { href: '/admin', label: 'Links', Icono: LinkSimple },
   { href: '/admin/funnels', label: 'Funnels', Icono: TreeStructure },
   { href: '/admin/catalogo', label: 'Catálogo', Icono: Storefront },
   { href: '/admin/productos', label: 'Productos', Icono: Package },
@@ -50,12 +48,13 @@ const SECCIONES = [
 ] as const;
 
 /**
- * `/admin` matchea solo exacto. Con `startsWith` quedaría marcado como activo en
- * todas las subrutas del panel a la vez, que es peor que no marcar nada: dos
- * ítems iluminados no dicen dónde estás.
+ * Match exacto o de subruta. Con `startsWith` sobre `/admin` a secas quedaría
+ * marcado como activo en todas las subrutas del panel a la vez, que es peor que
+ * no marcar nada: dos ítems iluminados no dicen dónde estás. Ya no hay un ítem
+ * con `href: '/admin'` (el Home dejó de ser una sección del nav, ver
+ * `app/admin/(panel)/page.tsx`), así que esta función quedó simple.
  */
 function estaActivo(pathname: string, href: string): boolean {
-  if (href === '/admin') return pathname === '/admin' || pathname.startsWith('/admin/paginas');
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 

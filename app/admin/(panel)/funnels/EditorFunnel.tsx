@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import {
+  ArrowBendDownRight,
   ArrowElbowDownRight,
   CaretRight,
   Copy,
@@ -13,7 +14,7 @@ import {
   Warning,
 } from '@phosphor-icons/react/ssr';
 import type { FunnelConPasos } from '../../../../lib/admin/funnels';
-import { snippetBotonHtml, snippetBotonJsx, snippetRechazo, snippetWalletHtml, snippetWalletJsx } from '../../../../lib/admin/integracion';
+import { snippetRechazo, snippetWalletHtml, snippetWalletJsx } from '../../../../lib/admin/integracion';
 import { Dialogo } from '@/components/panel/Dialogo';
 import {
   Aviso,
@@ -21,6 +22,7 @@ import {
   Campo,
   Insignia,
   SinDato,
+  Tarjeta,
   clasesControl,
   unir,
 } from '@/components/panel/ui';
@@ -158,13 +160,17 @@ export function EditorFunnel({ funnel, productos }: Props): JSX.Element {
 
   return (
     <div className="max-w-2xl space-y-6">
-      <div className="flex flex-col gap-4 rounded-card border border-panel-borde bg-panel-sup p-4 shadow-panel sm:flex-row sm:items-end">
-        <Campo etiqueta="Nombre del funnel" htmlFor="nombre-funnel" className="min-w-0 flex-1">
+      {/* El nombre del funnel es el único campo de "metadatos" fuera del riel:
+          vive en la misma tarjeta que guardar/descartar, igual patrón que usa
+          `DatosProducto` en `/admin/productos/[id]` — un bloque, no un
+          formulario suelto flotando arriba de la pila de pasos. */}
+      <Tarjeta className="flex flex-col gap-4 p-4 sm:flex-row sm:items-end sm:justify-between">
+        <Campo etiqueta="Nombre del funnel" htmlFor="nombre-funnel" className="min-w-0 flex-1 sm:max-w-sm">
           <input
             id="nombre-funnel"
             value={nombre}
             onChange={(e) => setNombre(e.target.value)}
-            className={clasesControl('font-medium', 'lg')}
+            className={clasesControl('text-[15px] font-semibold', 'lg')}
           />
         </Campo>
         <div className="flex shrink-0 gap-2">
@@ -175,7 +181,7 @@ export function EditorFunnel({ funnel, productos }: Props): JSX.Element {
             {guardando ? 'Guardando…' : 'Guardar funnel'}
           </Boton>
         </div>
-      </div>
+      </Tarjeta>
 
       {error ? (
         <Aviso tono="peligro" rol="alert" icono={<Warning size={16} aria-hidden="true" />}>
@@ -185,7 +191,7 @@ export function EditorFunnel({ funnel, productos }: Props): JSX.Element {
 
       {/* El lienzo punteado marca dónde termina el formulario y empieza el flujo.
           Es la única textura del panel y sirve para eso, no para decorar. */}
-      <div className="lienzo-flujo rounded-card border border-panel-borde bg-panel-sup p-5 shadow-panel">
+      <Tarjeta className="lienzo-flujo p-5">
         {pasos.length === 0 ? (
           <p className="py-6 text-center text-[13px] text-tinta-2">
             El funnel está vacío. Empezá por el producto principal: es la oferta que abre la cadena.
@@ -306,7 +312,7 @@ export function EditorFunnel({ funnel, productos }: Props): JSX.Element {
             </button>
           </div>
         </div>
-      </div>
+      </Tarjeta>
 
       {editandoIndice !== null ? (
         <FormularioPaso
@@ -504,8 +510,15 @@ function RamasDelPaso({
     return destino ? destino.nombre || destino.producto.nombre : 'página de gracias';
   }
 
+  // D7 (00-PLAN-PANEL-CATALOGO-FUNNELS.md §1): "Rechazó el upsell → página de
+  // gracias" y el botón de crear un downsell NO son dos destinos a la vez —
+  // son la MISMA rama, y el botón es el atajo para armar el paso al que esa
+  // rama va a apuntar. `lib/funnels.ts` ya lo modela así (una sola rama,
+  // nunca las dos), el problema reportado era de lectura, no de datos.
+  const vaAGracias = paso.paso_rechazado_indice == null;
+
   return (
-    <div className="mt-2 flex flex-col items-start gap-0.5">
+    <div className="mt-2 flex flex-col items-start gap-1.5">
       <Rama
         tono="vivo"
         // El texto distingue "pagó" de "aceptó la oferta": son eventos
@@ -515,24 +528,36 @@ function RamasDelPaso({
         destino={etiquetaDestino(paso.paso_aceptado_indice)}
         onClick={() => onAbrirRama('aceptado')}
       />
-      {/* El chip de rechazo solo existe en un upsell con el toggle activado: el
+      {/* El bloque de rechazo solo existe en un upsell con el toggle activado: el
           front nunca lo tiene (no hay nada que "rechazar" en la compra
           principal) y un upsell sin el toggle tampoco ofrece salida sin
-          comprar. */}
+          comprar.
+          Vive en UN SOLO contenedor con borde — no dos controles sueltos uno
+          al lado del otro — precisamente para que "Rechazó el upsell → X" y
+          la acción de crear el siguiente paso se lean como una sola rama con
+          un atajo, nunca como dos caminos que salen del mismo paso. */}
       {!esFront && paso.permite_rechazo ? (
-        <div className="flex flex-wrap items-center gap-1">
+        <div className="flex flex-wrap items-center gap-1 rounded-ctrl border border-dashed border-panel-bordeFuerte py-0.5 pl-0.5 pr-1">
           <Rama
             tono="peligro"
             que="Rechazó el upsell"
             destino={etiquetaDestino(paso.paso_rechazado_indice)}
             onClick={() => onAbrirRama('rechazado')}
           />
+          {/* El divisor solo aparece cuando el destino ya es un paso real: ahí
+              "crear un downsell nuevo" es una acción adicional, separada de la
+              rama que ya se armó. Cuando el destino todavía es la página de
+              gracias, el botón es la continuación natural de la MISMA frase
+              ("todavía no armaste un downsell — creá uno") y el divisor
+              sobraría. */}
+          {vaAGracias ? null : <span className="h-3 w-px shrink-0 bg-panel-bordeFuerte" aria-hidden="true" />}
           <button
             type="button"
             onClick={onAgregarDownsell}
-            className="rounded-ctrl px-1.5 py-1 text-[12px] font-medium text-tinta-3 transition-colors duration-150 hover:bg-panel-sup2 hover:text-tinta"
+            className="inline-flex items-center gap-1 rounded-[5px] px-1.5 py-1 text-[12px] font-medium text-tinta-3 transition-colors duration-150 hover:bg-panel-sup2 hover:text-tinta"
           >
-            + downsell
+            <ArrowBendDownRight size={12} aria-hidden="true" className="shrink-0" />
+            {vaAGracias ? 'Crear el paso al que va esta rama' : 'Crear otro downsell'}
           </button>
         </div>
       ) : null}
@@ -553,7 +578,7 @@ function RamasDelPaso({
  * `lib/admin/integracion.ts`). Así que cada paso lleva su propio botón, al
  * lado de sus propias ramas.
  *
- * Reusa `snippetBotonHtml` / `snippetBotonJsx` / `snippetRechazo` de
+ * Reusa `snippetWalletHtml` / `snippetWalletJsx` / `snippetRechazo` de
  * `lib/admin/integracion.ts` tal cual — no hay generación de HTML/JSX acá,
  * solo el pegado del bloque y la lógica de copiar. `integracionDesdeFunnel`
  * NO sirve para este caso porque exige `id` y `paso_rechazado_id` como
@@ -572,14 +597,34 @@ function SnippetDelPaso({
   /** false mientras el FUNNEL nunca se guardó (alta todavía no confirmada). */
   guardado: boolean;
 }): JSX.Element | null {
+  // [T05, cierra la lógica — T06 rediseña visualmente después]
+  //
+  // Elección del snippet único (D5, P-02 de §10 del plan): se retiró el
+  // toggle `['wallet', 'guardada']` — ya no es una decisión que le
+  // corresponda a un humano tomar de antemano por paso.
+  //
+  // Releído el comentario VIVO que había acá y `ESTADO.md` §3.0/§3.0.1 el
+  // 2026-09-13 (misma fecha de esta task), tal como pide T05-slug-oculto-
+  // snippet-unico.md antes de decidir:
+  //   - §3.0 SÍ registra cobros off-session reales y exitosos contra la API
+  //     de Whop (`pay_e7mWetvrDT8sOy → paid/succeeded`), pero ese trabajo
+  //     vive en la rama `feature/checkout-sin-configuration`, sin mergear a
+  //     `main` todavía.
+  //   - §3.0.1 lo dice sin condicionales: "El panel sigue entregando el
+  //     wallet por default en el editor de funnels — cambiar ese default a
+  //     'Tarjeta guardada' es una decisión de producto pendiente, no un
+  //     bloqueo técnico." No hay una frase que diga "ya se confirmó con
+  //     tráfico real de punta a punta usando el snippet del panel" — la
+  //     confirmación real fue de un POC fuera de este repo, no del propio
+  //     flujo que este componente genera.
+  // Con esa fuente, la condición del punto 3 de la task ("si ESTADO.md lo
+  // dice explícitamente, sin condicionales de 'todavía no se confirmó'") NO
+  // se cumple: sigue siendo una decisión de producto pendiente. Se mantiene
+  // `data-hilvana-wallet` (snippetWalletHtml/Jsx) como el único snippet — el
+  // default conservador, ya confirmado con Apple Pay real. Cuando el merge a
+  // `main` se confirme y el comentario de ESTADO.md deje de tener
+  // condicionales, este bloque cambia a `snippetBotonHtml`/`snippetBotonJsx`.
   const [lenguaje, setLenguaje] = useState<'html' | 'jsx'>('jsx');
-  // `wallet` sigue siendo el default: es el único camino confirmado con
-  // tráfico real hasta ahora. El cobro off-session (`data-hilvana-upsell`)
-  // dejó de pasar por una checkout configuration en el front (BITACORA.md
-  // 2026-09-13, causa probable del 400 histórico), pero todavía no se
-  // verificó con una compra real de punta a punta — no se cambia el default
-  // hasta confirmarlo.
-  const [modo, setModo] = useState<'wallet' | 'guardada'>('wallet');
   const [copiado, setCopiado] = useState(false);
 
   // Un paso NUEVO (sin `id`) no tiene slug confirmado en la base todavía: el
@@ -599,7 +644,23 @@ function SnippetDelPaso({
     );
   }
 
-  const precio = formatearPrecio(paso.producto.precio, paso.producto.moneda);
+  // [T05] Si el paso tiene el rechazo activado pero todavía no se le asignó
+  // destino, no se ofrece el snippet como copiable (D6): el aviso reemplaza
+  // al bloque de código, igual patrón que el aviso de arriba para un paso sin
+  // guardar. Evita que alguien copie un botón cuyo "no gracias" cae en el
+  // placeholder `/downsell` de `snippetRechazo` sin saber por qué está
+  // incompleto — esa función no se toca, sigue con su fallback y sus 8 tests;
+  // lo que cambia es que este componente deja de invocarla en este caso.
+  const rechazoSinResolver = paso.permite_rechazo && paso.paso_rechazado_indice == null;
+  if (rechazoSinResolver) {
+    return (
+      <p className="mt-2 rounded-ctrl border border-dashed border-panel-bordeFuerte bg-panel-sup2/50 px-3 py-2 text-[12px] leading-relaxed text-tinta-3">
+        Este paso tiene el botón de rechazo activado pero todavía no le asignaste a dónde va. Elegí un
+        destino en la rama &quot;Rechazó el upsell&quot; antes de copiar el botón.
+      </p>
+    );
+  }
+
   const pasoParaSnippet = {
     slug: paso.slug,
     tipo: paso.tipo,
@@ -618,13 +679,7 @@ function SnippetDelPaso({
     paso.paso_rechazado_indice != null ? pasos[paso.paso_rechazado_indice]?.url_externa ?? null : null;
 
   const codigo = [
-    modo === 'wallet'
-      ? lenguaje === 'html'
-        ? snippetWalletHtml(pasoParaSnippet)
-        : snippetWalletJsx(pasoParaSnippet)
-      : lenguaje === 'html'
-        ? snippetBotonHtml(pasoParaSnippet, precio)
-        : snippetBotonJsx(pasoParaSnippet, precio),
+    lenguaje === 'html' ? snippetWalletHtml(pasoParaSnippet) : snippetWalletJsx(pasoParaSnippet),
     '',
     paso.permite_rechazo ? snippetRechazo(destino) : null,
   ]
@@ -645,46 +700,15 @@ function SnippetDelPaso({
 
   return (
     <div className="mt-2.5 space-y-1.5">
-      {/* El selector de CÓMO cobra va arriba del de lenguaje porque cambia qué
-          hace el botón, no cómo se escribe. */}
-      <div className="inline-flex rounded-ctrl border border-panel-bordeFuerte bg-panel-sup2 p-0.5">
-        {(
-          [
-            ['wallet', 'Apple Pay / tarjeta'],
-            ['guardada', 'Tarjeta guardada'],
-          ] as const
-        ).map(([valor, etiqueta]) => (
-          <button
-            key={valor}
-            type="button"
-            onClick={() => setModo(valor)}
-            aria-pressed={modo === valor}
-            className={unir(
-              'rounded-[5px] px-2 py-0.5 text-[11px] font-medium transition-colors duration-150',
-              modo === valor ? 'bg-panel-sup text-tinta shadow-panel' : 'text-tinta-3 hover:text-tinta',
-            )}
-          >
-            {etiqueta}
-          </button>
-        ))}
-      </div>
-
-      {modo === 'wallet' ? (
-        <p className="text-[11px] leading-relaxed text-tinta-3">
-          Un botón que cobra en un toque. Apple Pay en Safari, Google Pay en Chrome y Android, y en el
-          resto un diálogo de Whop que acepta <strong className="font-medium text-tinta-2">tarjeta</strong>.
-          El wallet resuelve la autenticación del banco solo.
-        </p>
-      ) : (
-        <p className="text-[11px] leading-relaxed text-tinta-3">
-          Cobra contra la tarjeta que se guardó en el front, sin ninguna interacción. Hasta ahora Whop
-          rechazaba este cobro con un error genérico — el checkout del front dejó de pasar por una
-          checkout configuration (ver BITACORA.md 2026-09-13), que es lo que se identificó como la
-          causa probable. <strong className="font-medium text-tinta-2">Todavía no se confirmó con una
-          compra real de punta a punta</strong>: probalo primero en un funnel de prueba antes de
-          confiar en él para ventas reales.
-        </p>
-      )}
+      {/* [T05] Se eliminó el selector `['wallet', 'guardada']` (D5): ya no
+          hay una elección manual entre "cómo cobra" — el panel entrega un
+          único snippet por paso. Ver el razonamiento y la fuente en el
+          comentario de cabecera de este componente. */}
+      <p className="text-[11px] leading-relaxed text-tinta-3">
+        Un botón que cobra en un toque. Apple Pay en Safari, Google Pay en Chrome y Android, y en el
+        resto un diálogo de Whop que acepta <strong className="font-medium text-tinta-2">tarjeta</strong>.
+        El wallet resuelve la autenticación del banco solo.
+      </p>
 
       <div className="flex items-center justify-between gap-2">
         <div className="inline-flex rounded-ctrl border border-panel-bordeFuerte bg-panel-sup2 p-0.5">

@@ -17,7 +17,16 @@
  * `process.env`: la base pública entra por parámetro. Es lo que permite probar
  * el HTML exacto que se le va a dar al usuario, que es la única forma de que
  * "el snippet está bien" sea una afirmación verificable y no una esperanza.
+ *
+ * La única excepción es `generarSlugConSufijo` (al final del archivo): usa
+ * `crypto.getRandomValues` (Web Crypto API estándar, disponible en Node y en el
+ * browser — NO `node:crypto`, que rompería el bundle de cualquier client
+ * component que importe este archivo) para el sufijo anticolisión, y
+ * `normalizarSlug` de `./slug` (módulo puro, sin `pg`) para la base — sigue
+ * siendo puro en el sentido que importa (sin base, sin red), solo ya no es
+ * "sin ningún import".
  */
+import { normalizarSlug } from './slug';
 
 /** Un paso del funnel, reducido a lo que hace falta para generar su botón. */
 export type PasoParaSnippet = {
@@ -447,4 +456,52 @@ export function integracionDesdeFunnel(
   pasos: PasoDeFunnelParaSnippet[],
 ): Integracion {
   return integracionDeFunnel(base, pasos, destinosDeRechazo(pasos));
+}
+
+/**
+ * Genera un slug único para un paso nuevo: `<base>-<sufijo>`.
+ *
+ * El sufijo son 5 bytes aleatorios en base64url (7 caracteres: `[A-Za-z0-9_-]`),
+ * no un UUID completo — un slug es un atributo HTML y una URL pública, y un
+ * sufijo de 7 caracteres ya da 0 colisiones en 100.000 muestras (verificado,
+ * §3 de 00-PLAN-PANEL-CATALOGO-FUNNELS.md) sin que el link se vea como un hash
+ * ilegible.
+ *
+ * `crypto.getRandomValues` (la Web Crypto API estándar, no `node:crypto`), y no
+ * `Math.random()`: `Math.random()` no es criptográfico y su período es corto, y
+ * la garantía de "nunca dos operadores chocan" necesita la entropía real del
+ * sistema, no un generador previsible. Se usa `getRandomValues` — disponible en
+ * `globalThis.crypto` tanto en Node (18+) como en el browser — y no
+ * `randomBytes` de `node:crypto` porque esta función se llama tanto desde
+ * código de servidor como desde `FormularioPaso.tsx` (`'use client'`, el
+ * formulario del editor de funnels): un import de `node:crypto` en un archivo
+ * que un client component importa rompe el build de Next con
+ * "UnhandledSchemeError: node:crypto" — confirmado en la ejecución real de la
+ * ola 2 de este módulo.
+ *
+ * `base64url` y no `base64` simple: `base64` estándar mete `+` y `/`, que no son
+ * válidos en un slug de URL sin escapar. `base64url` (RFC 4648 §5) usa `-` y `_`
+ * en su lugar, que sí lo son. `Buffer.toString('base64url')` tampoco está
+ * disponible en el browser, así que la codificación se hace a mano con
+ * `btoa` + el reemplazo de los tres caracteres que distinguen base64 de
+ * base64url.
+ *
+ * NO se valida contra la base acá — es una función pura. El caller (el
+ * guardado del funnel) es quien reintenta con un sufijo nuevo si
+ * `paginas_slug_idx` rechaza, igual que hoy reacciona a `slug_ocupado`. La
+ * colisión final la resuelve ese índice único, no esta función: acá solo se
+ * hace la probabilidad de necesitarlo casi nula.
+ */
+export function generarSlugConSufijo(base: string): string {
+  const bytes = new Uint8Array(5);
+  globalThis.crypto.getRandomValues(bytes);
+  // `Array.from` y no el spread (`...bytes`): el `target` del tsconfig es ES5
+  // y iterar un `Uint8KArray` con spread exige `downlevelIteration` — mismo
+  // motivo que ya evita el spread de un `Set` más arriba en este archivo
+  // (`origenesNecesarios`). btoa espera un string "binario" (un char por
+  // byte), no un array de números: `String.fromCharCode` sobre cada byte es
+  // el puente estándar.
+  const base64 = btoa(String.fromCharCode(...Array.from(bytes)));
+  const sufijo = base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return `${normalizarSlug(base)}-${sufijo}`;
 }

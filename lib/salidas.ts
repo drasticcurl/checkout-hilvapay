@@ -6,7 +6,7 @@
  * pueden comerse ese presupuesto. Un cron drena esta tabla.
  */
 import { q, q1, qCount } from './db';
-import type { Cobro, Orden, Pagina, Producto, Salida } from './tipos';
+import type { Cobro, Orden, Pagina, Salida } from './tipos';
 
 /** Cuántas veces se reintenta una fila antes de dejarla en paz (sin borrarla). */
 export const MAX_INTENTOS = 10;
@@ -100,12 +100,23 @@ export async function marcarFallida(id: string, error: string): Promise<void> {
  * `{motivo, pago_id}` — y no repite datos que ya viven en `cobros`/`ordenes`:
  * repetirlos ahí los dejaría desactualizados si el cobro cambia entre que se
  * encola la salida y que el cron la drena.
+ *
+ * `producto` es un tipo REDUCIDO (`{ nombre, moneda }`), no el `Producto`
+ * completo de `lib/tipos.ts`. Desde que ese tipo perdió `precio`/`whop_plan_id`
+ * (módulo `panel-catalogo-funnels`, T01: el precio real de un cobro histórico
+ * vive en `cobros.monto`/`cobros.moneda`, nunca en el producto — un producto
+ * puede tener hoy un precio distinto al que tenía cuando se hizo este cobro).
+ * Los dos únicos campos que `armarPayloadIngest` y el cron de salidas leen de
+ * `producto` son `moneda` (fallback cuando `cobro.moneda` es null) y `nombre`
+ * (para el email de entrega) — verificado con un `grep` de todo el código que
+ * consume `FilaCobroParaSalida.producto` antes de reducir el tipo, para no
+ * sacar un campo que alguien sí necesitaba.
  */
 export type FilaCobroParaSalida = {
   cobro: Cobro;
   orden: Orden;
   pagina: Pagina;
-  producto: Producto;
+  producto: { nombre: string; moneda: string };
 };
 
 /**
@@ -148,11 +159,7 @@ export async function buscarDatosParaSalida(cobroId: string): Promise<FilaCobroP
         pg.url_exito as pg_url_exito, pg.url_rechazo as pg_url_rechazo, pg.config as pg_config,
         pg.activo as pg_activo, pg.created_at as pg_created_at, pg.updated_at as pg_updated_at,
 
-        pr.id as pr_id, pr.nombre as pr_nombre, pr.whop_plan_id as pr_whop_plan_id,
-        pr.whop_product_id as pr_whop_product_id, pr.whop_nombre_soft as pr_whop_nombre_soft,
-        pr.precio as pr_precio, pr.moneda as pr_moneda, pr.precio_anclaje as pr_precio_anclaje,
-        pr.imagen_url as pr_imagen_url, pr.descripcion as pr_descripcion, pr.activo as pr_activo,
-        pr.created_at as pr_created_at, pr.updated_at as pr_updated_at
+        pr.nombre as pr_nombre, pr.moneda as pr_moneda
        from cobros c
        join ordenes o    on o.id = c.orden_id
        join paginas pg   on pg.id = c.pagina_id
@@ -216,20 +223,9 @@ export async function buscarDatosParaSalida(cobroId: string): Promise<FilaCobroP
     updated_at: fila.pg_updated_at as Date,
   };
 
-  const producto: Producto = {
-    id: fila.pr_id as string,
+  const producto = {
     nombre: fila.pr_nombre as string,
-    whop_plan_id: fila.pr_whop_plan_id as string,
-    whop_product_id: fila.pr_whop_product_id as string | null,
-    whop_nombre_soft: fila.pr_whop_nombre_soft as string | null,
-    precio: fila.pr_precio as string,
     moneda: fila.pr_moneda as string,
-    precio_anclaje: fila.pr_precio_anclaje as string | null,
-    imagen_url: fila.pr_imagen_url as string | null,
-    descripcion: fila.pr_descripcion as string | null,
-    activo: fila.pr_activo as boolean,
-    created_at: fila.pr_created_at as Date,
-    updated_at: fila.pr_updated_at as Date,
   };
 
   return { cobro, orden, pagina, producto };

@@ -26,25 +26,54 @@ export type { EstadoCobro, AccionDecline } from './estado-pago';
 
 // ── Filas ────────────────────────────────────────────────────────────────────
 
-/** Fila de `productos`. Lo que se vende, con el nombre y el precio REALES. */
+/** Fila de `productos`. YA NO tiene precio propio: precio vive en ProductoPlan. */
 export type Producto = {
   id: string;
-  /** El nombre que ve el comprador. En Whop el plan puede llamarse distinto. */
   nombre: string;
-  whop_plan_id: string;
-  whop_product_id: string | null;
-  /** Cómo se llama el plan del lado de Whop. Cacheado para mostrar los dos juntos. */
-  whop_nombre_soft: string | null;
-  /** Precio que se MUESTRA. Debe coincidir con el `initial_price` del plan (D10). */
-  precio: string;
-  moneda: string;
-  /** Precio tachado. Solo display. */
-  precio_anclaje: string | null;
   imagen_url: string | null;
   descripcion: string | null;
   activo: boolean;
   created_at: Date;
   updated_at: Date;
+  // whop_plan_id, precio, moneda, precio_anclaje, whop_nombre_soft: retirados de
+  // este tipo (siguen en la tabla, D2, pero nadie los lee vía este tipo).
+  // whop_product_id se mantiene: identifica el access_pass del PRODUCTO, no de
+  // un plan puntual, y sirve para "agregar otra variante del mismo access_pass"
+  // en la ficha de edición.
+  whop_product_id: string | null;
+};
+
+/** Fila de `producto_planes`. Cada precio cobrable de un producto. */
+export type ProductoPlan = {
+  id: string;
+  producto_id: string;
+  whop_plan_id: string;
+  whop_nombre_soft: string | null;
+  etiqueta: string;
+  /** numeric(10,2) del driver pg → string, igual que Producto.precio antes. */
+  precio: string;
+  moneda: string;
+  precio_anclaje: string | null;
+  es_default: boolean;
+  activo: boolean;
+  created_at: Date;
+  updated_at: Date;
+};
+
+/** Un producto con TODAS sus variantes de precio ya resueltas. */
+export type ProductoConPlanes = Producto & { planes: ProductoPlan[] };
+
+/**
+ * Lo que la página de checkout y el editor de funnels necesitan: el producto
+ * resuelto a través de SU variante específica, aplanado para no obligar a cada
+ * consumidor a navegar `producto.planes.find(...)`.
+ *
+ * Reemplaza al uso de `PaginaConProducto` de `lib/tipos.ts` (plan anterior) en
+ * todo lugar donde antes se leía `producto.precio` — ahora se lee
+ * `productoPlan.precio` a través de este tipo aplanado.
+ */
+export type PaginaConProductoPlan = Omit<Pagina, 'producto_id'> & {
+  producto_plan: ProductoPlan & { producto: Producto };
 };
 
 /**

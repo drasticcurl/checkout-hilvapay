@@ -1,32 +1,43 @@
 'use client';
 
 /**
- * Formulario de alta/edición de producto. El selector de plan de Whop tiene
- * fallback manual (P-09: el path de `GET /plans` puede no responder), y el
- * aviso de precio (D10) se recalcula cada vez que cambia el plan o el precio
- * mostrado, visible en pantalla y no en un tooltip. No bloquea el guardado.
+ * Alta de producto NUEVO: nombre/foto/descripción + su primera variante de
+ * precio. Desde la migración 010 un producto SIEMPRE nace con al menos una
+ * variante (`crearProductoConPlan`) — no tiene sentido un producto sin ningún
+ * precio cobrable.
+ *
+ * La edición de un producto YA EXISTENTE no usa este formulario: vive en
+ * `/admin/productos/[id]`, separada en "datos del producto" (sin precio) y la
+ * lista de variantes con sus links, cada una editable por su cuenta. Mezclar
+ * las dos en un solo formulario es justamente el problema que este módulo
+ * corrige (un producto con dos precios ya no es "un producto, un precio").
+ *
+ * El selector de plan de Whop tiene fallback manual (P-09: el path de
+ * `GET /plans` puede no responder), y el aviso de precio (D10) se recalcula
+ * cada vez que cambia el plan o el precio mostrado, visible en pantalla y no
+ * en un tooltip. No bloquea el guardado.
  */
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, ImageSquare, Warning, X } from '@phosphor-icons/react/ssr';
 import type { PlanWhop } from '../../../../lib/whop';
-import type { Producto } from '../../../../lib/tipos';
 import { Boton, Campo, Tarjeta, clasesControl, unir } from '@/components/panel/ui';
-
-type Props = { producto?: Producto };
 
 type VerificacionPrecio = { coincide: boolean; precioReal: string; moneda: string } | null;
 
-export function FormularioProducto({ producto }: Props): JSX.Element {
+export function FormularioProducto(): JSX.Element {
   const router = useRouter();
-  const editando = Boolean(producto);
 
-  const [nombre, setNombre] = useState(producto?.nombre ?? '');
-  const [planId, setPlanId] = useState(producto?.whop_plan_id ?? '');
-  const [precio, setPrecio] = useState(producto?.precio ?? '');
-  const [precioAnclaje, setPrecioAnclaje] = useState(producto?.precio_anclaje ?? '');
-  const [descripcion, setDescripcion] = useState(producto?.descripcion ?? '');
-  const [imagenUrl, setImagenUrl] = useState(producto?.imagen_url ?? '');
+  const [nombre, setNombre] = useState('');
+  const [planId, setPlanId] = useState('');
+  const [whopProductId, setWhopProductId] = useState<string | null>(null);
+  const [whopNombreSoft, setWhopNombreSoft] = useState<string | null>(null);
+  const [etiqueta, setEtiqueta] = useState('Precio completo');
+  const [precio, setPrecio] = useState('');
+  const [precioAnclaje, setPrecioAnclaje] = useState('');
+  const [slug, setSlug] = useState('');
+  const [descripcion, setDescripcion] = useState('');
+  const [imagenUrl, setImagenUrl] = useState('');
   const [subiendo, setSubiendo] = useState(false);
   const [errorImagen, setErrorImagen] = useState<string | null>(null);
 
@@ -112,6 +123,13 @@ export function FormularioProducto({ producto }: Props): JSX.Element {
     }
   }
 
+  function alElegirPlan(id: string): void {
+    setPlanId(id);
+    const encontrado = planes.find((p) => p.id === id);
+    setWhopProductId(encontrado?.product?.id ?? null);
+    setWhopNombreSoft(encontrado?.product?.title ?? null);
+  }
+
   async function onSubmit(e: React.FormEvent<HTMLFormElement>): Promise<void> {
     e.preventDefault();
     setEnviando(true);
@@ -119,26 +137,41 @@ export function FormularioProducto({ producto }: Props): JSX.Element {
     try {
       const body = {
         nombre,
-        whop_plan_id: planId,
-        precio,
-        precio_anclaje: precioAnclaje.trim() ? precioAnclaje : null,
+        whop_product_id: whopProductId,
         descripcion: descripcion.trim() ? descripcion : null,
         imagen_url: imagenUrl.trim() ? imagenUrl : null,
+        whop_plan_id: planId,
+        whop_nombre_soft: whopNombreSoft,
+        etiqueta: etiqueta.trim() || 'Precio completo',
+        precio,
+        precio_anclaje: precioAnclaje.trim() ? precioAnclaje : null,
+        slug: slug.trim() ? slug : undefined,
       };
-      const res = await fetch(
-        editando ? `/api/admin/productos/${producto!.id}` : '/api/admin/productos',
-        {
-          method: editando ? 'PATCH' : 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        },
-      );
+      const res = await fetch('/api/admin/productos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         setError(data.error ?? 'error_desconocido');
         return;
       }
-      router.push('/admin/productos');
+      const data = (await res.json()) as { producto: { id: string }; errorSlug?: string };
+      if (data.errorSlug) {
+        // El producto y su variante quedaron creados igual — solo el link
+        // falló. Se navega a la ficha para que el operador resuelva el slug
+        // ahí, en vez de perder el resto de lo que ya escribió.
+        setError(
+          data.errorSlug === 'slug_ya_existe'
+            ? 'el producto se creó, pero ese slug ya estaba en uso — cambialo en la ficha'
+            : 'el producto se creó, pero no se pudo crear el link — creálo en la ficha',
+        );
+        router.push(`/admin/productos/${data.producto.id}`);
+        router.refresh();
+        return;
+      }
+      router.push(`/admin/productos/${data.producto.id}`);
       router.refresh();
     } finally {
       setEnviando(false);
@@ -165,7 +198,7 @@ export function FormularioProducto({ producto }: Props): JSX.Element {
 
         <div className="space-y-1.5">
           <label htmlFor="producto-plan" className="block text-[13px] font-medium text-tinta">
-            Plan de Whop
+            Plan de Whop (primera variante)
           </label>
 
           {!modoManual ? (
@@ -174,7 +207,7 @@ export function FormularioProducto({ producto }: Props): JSX.Element {
                 id="producto-plan"
                 required
                 value={planId}
-                onChange={(e) => setPlanId(e.target.value)}
+                onChange={(e) => alElegirPlan(e.target.value)}
                 className={clasesControl()}
               >
                 <option value="">Elegí un plan…</option>
@@ -222,6 +255,21 @@ export function FormularioProducto({ producto }: Props): JSX.Element {
           )}
         </div>
 
+        <Campo
+          etiqueta="Etiqueta de esta variante"
+          htmlFor="producto-etiqueta"
+          ayuda="Cómo se distingue de otras variantes que agregues después, ej. 'Precio completo' o 'Oferta'."
+        >
+          <input
+            id="producto-etiqueta"
+            type="text"
+            required
+            value={etiqueta}
+            onChange={(e) => setEtiqueta(e.target.value)}
+            className={clasesControl()}
+          />
+        </Campo>
+
         <div className="grid gap-4 sm:grid-cols-2">
           <Campo etiqueta="Precio de display" htmlFor="producto-precio">
             <input
@@ -241,12 +289,34 @@ export function FormularioProducto({ producto }: Props): JSX.Element {
               id="producto-anclaje"
               type="text"
               inputMode="decimal"
-              value={precioAnclaje ?? ''}
+              value={precioAnclaje}
               onChange={(e) => setPrecioAnclaje(e.target.value)}
               className={clasesControl('font-mono tabular-nums')}
             />
           </Campo>
         </div>
+
+        <Campo
+          etiqueta="Slug del link de pago"
+          htmlFor="producto-slug"
+          opcional
+          ayuda={
+            <>
+              El link queda en{' '}
+              <span className="font-mono text-tinta-2">/pagos/{slug ? slug.trim().toLowerCase() : '…'}</span>.
+              Vacío = sin link todavía, se crea después desde el editor de funnels.
+            </>
+          }
+        >
+          <input
+            id="producto-slug"
+            type="text"
+            placeholder="agua-de-arroz"
+            value={slug}
+            onChange={(e) => setSlug(e.target.value)}
+            className={clasesControl('font-mono')}
+          />
+        </Campo>
 
         {/*
           El aviso de D10: visible en pantalla, no en un tooltip, y no bloquea el
@@ -351,7 +421,7 @@ export function FormularioProducto({ producto }: Props): JSX.Element {
           </summary>
           <input
             type="text"
-            value={imagenUrl ?? ''}
+            value={imagenUrl}
             onChange={(e) => setImagenUrl(e.target.value)}
             placeholder="https://…"
             aria-label="URL de la imagen"
@@ -364,7 +434,7 @@ export function FormularioProducto({ producto }: Props): JSX.Element {
         <Campo etiqueta="Descripción" htmlFor="producto-descripcion" opcional>
           <textarea
             id="producto-descripcion"
-            value={descripcion ?? ''}
+            value={descripcion}
             onChange={(e) => setDescripcion(e.target.value)}
             rows={3}
             className={clasesControl('leading-relaxed', 'auto')}
@@ -380,7 +450,7 @@ export function FormularioProducto({ producto }: Props): JSX.Element {
 
       <div className="flex items-center gap-2">
         <Boton type="submit" variante="primario" tamano="lg" disabled={enviando}>
-          {enviando ? 'Guardando…' : editando ? 'Guardar cambios' : 'Crear producto'}
+          {enviando ? 'Guardando…' : 'Crear producto'}
         </Boton>
       </div>
     </form>

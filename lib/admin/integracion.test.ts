@@ -12,6 +12,7 @@ import {
   baseEsAbsoluta,
   destinosDeRechazo,
   formatearPrecio,
+  generarSlugConSufijo,
   integracionDeFunnel,
   integracionDesdeFunnel,
   normalizarBase,
@@ -335,5 +336,29 @@ describe('destinosDeRechazo', () => {
     const r = integracionDesdeFunnel(BASE, [u1, down1]);
     const upsell = r.pasos.find((p) => p.slug === 'upsell1');
     expect(upsell?.html).toContain('<a href="https://funnel.com/downsell-latam">No, gracias</a>');
+  });
+});
+
+describe('generarSlugConSufijo', () => {
+  it('20 llamadas con la misma base dan 20 sufijos distintos (§7.3 de T01)', () => {
+    const slugs = Array.from({ length: 20 }, () => generarSlugConSufijo('Upsell 1'));
+    expect(new Set(slugs).size).toBe(20);
+  });
+
+  it('el slug empieza con la base normalizada seguida de un guion', () => {
+    const slug = generarSlugConSufijo('Upsell 1');
+    expect(slug).toMatch(/^upsell-1-[A-Za-z0-9_-]{7}$/);
+  });
+
+  it('normaliza la base igual que normalizarSlug (acentos, espacios, mayúsculas)', () => {
+    const slug = generarSlugConSufijo('  Ofertá Ñandú  ');
+    expect(slug.startsWith('oferta-nandu-')).toBe(true);
+  });
+
+  it('el sufijo son 7 caracteres de base64url, sin "+" ni "/"', () => {
+    const slug = generarSlugConSufijo('x');
+    const sufijo = slug.slice('x-'.length);
+    expect(sufijo).toHaveLength(7);
+    expect(sufijo).not.toMatch(/[+/]/);
   });
 });
