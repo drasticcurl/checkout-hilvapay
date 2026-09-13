@@ -62,7 +62,9 @@ export default async function ConexionPage(): Promise<JSX.Element> {
             Prueba la key de acá abajo tal como está guardada, sin abrir el
             formulario ni tocar nada.
           </p>
-          <BotonProbarActual />
+          <BotonProbarActual
+            estado={{ companyId: estado.companyId, base: estado.base, versionDate: estado.versionDate }}
+          />
         </div>
         <dl className="divide-y divide-panel-borde">
           <Dato etiqueta="De dónde salen">

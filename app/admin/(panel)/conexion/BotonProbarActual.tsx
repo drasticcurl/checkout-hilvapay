@@ -10,15 +10,19 @@ type Resultado = { tipo: 'nada' } | { tipo: 'probando' } | { tipo: 'ok'; company
  * Botón standalone en la tarjeta de solo-lectura: prueba la API key QUE YA ESTÁ
  * GUARDADA contra Whop, sin abrir el formulario de abajo.
  *
- * Reusa `POST /api/admin/whop/credenciales` con los cuatro campos vacíos — ese
- * endpoint ya resuelve "vacío = la que está puesta" (ver `leerCredenciales` en
- * el route handler), así que no hace falta un endpoint nuevo. El botón
- * "Probar contra Whop" de `FormularioCredenciales` hace lo mismo, pero exige
- * desplegar el formulario primero; este vive arriba, al lado de los datos que
- * ya se están mostrando, para el caso de uso de "solo quiero confirmar que
- * sigue viva, no quiero cambiar nada".
+ * Reusa `POST /api/admin/whop/credenciales`. Ese endpoint solo completa
+ * `apiKey` en blanco con la que ya está guardada (`leerCredenciales` en el
+ * route handler) — `companyId`, `base` y `versionDate` los exige explícitos,
+ * porque el formulario real siempre los manda (arranca precargado con
+ * `estado.companyId` y compañía). Por eso este botón viaja con esos tres
+ * campos ya resueltos desde `estado`, y `apiKey` vacío para que el servidor
+ * complete con la guardada — el browser nunca la tiene.
  */
-export function BotonProbarActual(): JSX.Element {
+export function BotonProbarActual({
+  estado,
+}: {
+  estado: { companyId: string; base: string; versionDate: string };
+}): JSX.Element {
   const [resultado, setResultado] = useState<Resultado>({ tipo: 'nada' });
 
   async function probar(): Promise<void> {
@@ -27,7 +31,11 @@ export function BotonProbarActual(): JSX.Element {
       const res = await fetch('/api/admin/whop/credenciales', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          companyId: estado.companyId,
+          base: estado.base,
+          versionDate: estado.versionDate,
+        }),
       });
       const data = (await res.json()) as
         | { ok: true; companyNombre: string }
