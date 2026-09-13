@@ -114,11 +114,38 @@ const SCRIPT = `
       }
     }
 
+    /**
+     * "texto" es el mensaje mientras está en vuelo ("Procesando..."). Cuando se
+     * quiere DEJAR el botón operable de nuevo (habilitar) hay que restaurar el
+     * texto original, no dejarlo en null: un botón que dice "Procesando..." para
+     * siempre, mientras adentro ya no está deshabilitado, es el bug que costó
+     * una compra real el 2026-09-13 — el cobro había salido bien (Whop lo tenía
+     * "pagado"), pero sin "siguienteUrl" configurado el loader caía a "avisar y
+     * quedarse", y el texto nunca volvía a ser el original.
+     */
     function deshabilitar(boton, texto) {
       try {
         if (boton && boton.setAttribute) {
           boton.setAttribute('disabled', 'disabled');
           if (texto) boton.textContent = texto;
+        }
+      } catch (e) {}
+    }
+
+    /**
+     * Vuelve el botón a como estaba antes de tocarlo: habilitado y con su texto
+     * original. Se usa en los caminos donde el cobro NO avanza a ningún lado
+     * (falló sin poder recuperar, o no hay destino configurado) — es la
+     * contraparte de "deshabilitar", y existe porque "deshabilitar(boton, null)"
+     * + "removeAttribute('disabled')" deja el atributo bien pero el texto
+     * pegado en "Procesando...".
+     */
+    function habilitar(boton) {
+      try {
+        if (!boton) return;
+        boton.removeAttribute('disabled');
+        if (boton.hasAttribute && boton.hasAttribute('data-hilvana-texto-original')) {
+          boton.textContent = boton.getAttribute('data-hilvana-texto-original');
         }
       } catch (e) {}
     }
@@ -298,6 +325,13 @@ const SCRIPT = `
       }
 
       cobroEnCurso = true;
+      // Guarda el texto que tenía el botón ANTES de pisarlo con "Procesando...",
+      // así habilitar() lo puede restaurar más abajo si el cobro no termina
+      // en un redirect. Solo la primera vez: un reintento no debe guardar
+      // "Procesando..." como si fuera el original.
+      if (boton && boton.setAttribute && !boton.hasAttribute('data-hilvana-texto-original')) {
+        boton.setAttribute('data-hilvana-texto-original', boton.textContent || '');
+      }
       deshabilitar(boton, 'Procesando...');
 
       try {
@@ -313,8 +347,7 @@ const SCRIPT = `
 
         if (!resultado || !resultado.cobroId) {
           console.log('[hilvana] aceptarUpsell(' + slug + '): respuesta inesperada', resultado);
-          deshabilitar(boton, null);
-          if (boton) boton.removeAttribute('disabled');
+          habilitar(boton);
           return;
         }
 
@@ -350,11 +383,10 @@ const SCRIPT = `
         // el mensaje si lo necesita, leyendo window.hilvana en su propio
         // manejador de click en lugar de data-hilvana-upsell.
         console.log('[hilvana] aceptarUpsell(' + slug + '): ' + (final.mensaje || 'sin siguiente URL'));
-        deshabilitar(boton, null);
-        if (boton) boton.removeAttribute('disabled');
+        habilitar(boton);
       } catch (e) {
         console.log('[hilvana] aceptarUpsell(' + slug + '): error de red', e);
-        if (boton) boton.removeAttribute('disabled');
+        habilitar(boton);
       } finally {
         cobroEnCurso = false;
       }
