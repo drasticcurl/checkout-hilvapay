@@ -285,6 +285,42 @@ export async function setActivoProducto(id: string, activo: boolean): Promise<vo
   await q('update productos set activo = $1, updated_at = now() where id = $2', [activo, id]);
 }
 
+export type ResultadoBorrado =
+  | { ok: true }
+  | { ok: false; error: 'tiene_links' | 'tiene_cobros' | 'no_encontrado' };
+
+/**
+ * Borra un producto de verdad (DELETE, no el switch de `activo`) — solo
+ * cuando es seguro: nunca si tiene alguna página (link de pago, activa o no)
+ * o algún cobro histórico apuntándole, porque eso es plata real o un link que
+ * puede seguir circulando. La base ya lo impediría sola (`paginas.producto_id`
+ * es `on delete restrict`, y `cobros.producto_id` no tiene cascada), pero se
+ * chequea acá ANTES para devolver un error que la pantalla pueda explicar en
+ * vez de un 500 genérico de constraint violada.
+ *
+ * Si el producto no tiene ninguna dependencia, el DELETE se lleva en cascada
+ * sus variantes (`producto_planes.producto_id` es `on delete cascade`) — no
+ * hay nada de valor ahí si nunca tuvo un link.
+ *
+ * Es el camino para limpiar productos que se cargaron mal o quedaron sin uso
+ * (como el que queda desactivado tras una fusión, ver migración 013) — pero
+ * solo cuando de verdad no tienen historial. Si lo tienen, la pantalla ofrece
+ * en cambio desactivarlo (`setActivoProducto`), que es reversible.
+ */
+export async function borrarProducto(id: string): Promise<ResultadoBorrado> {
+  const existe = await q1<{ id: string }>('select id from productos where id = $1', [id]);
+  if (!existe) return { ok: false, error: 'no_encontrado' };
+
+  const tieneLinks = await q1<{ id: string }>('select id from paginas where producto_id = $1 limit 1', [id]);
+  if (tieneLinks) return { ok: false, error: 'tiene_links' };
+
+  const tieneCobros = await q1<{ id: string }>('select id from cobros where producto_id = $1 limit 1', [id]);
+  if (tieneCobros) return { ok: false, error: 'tiene_cobros' };
+
+  await q('delete from productos where id = $1', [id]);
+  return { ok: true };
+}
+
 // ── Funciones nuevas — el contrato de §4 de T01 ─────────────────────────────
 
 /** Agrupa filas planas `producto + plan` en `ProductoConPlanes[]`, conservando el orden de aparición. */

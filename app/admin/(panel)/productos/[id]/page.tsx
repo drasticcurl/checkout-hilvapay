@@ -8,6 +8,7 @@ import { Pestanas } from '../../../../../components/panel/Pestanas';
 import { DatosProducto } from './DatosProducto';
 import { ListaVariantes, type PlanConPagina } from './ListaVariantes';
 import { AgregarVariante } from './AgregarVariante';
+import { BorrarProductoButton } from './BorrarProductoButton';
 
 /**
  * `force-dynamic` no es decorativo: esta página consulta la base para llenar sus
@@ -96,7 +97,22 @@ export default async function EditarProductoPage({
           {
             id: 'datos',
             etiqueta: 'Datos',
-            contenido: <DatosProducto producto={producto} />,
+            contenido: (
+              <div className="space-y-6">
+                <DatosProducto producto={producto} />
+                <div className="flex items-center justify-between gap-4 border-t border-panel-borde pt-5">
+                  <p className="text-[12px] leading-relaxed text-tinta-3">
+                    Borrar el producto no se puede deshacer. Solo funciona si no tiene ningún link de
+                    pago ni ningún cobro histórico.
+                  </p>
+                  <BorrarProductoButton
+                    id={producto.id}
+                    nombre={producto.nombre}
+                    tieneVariantes={planes.length > 0}
+                  />
+                </div>
+              </div>
+            ),
           },
           {
             id: 'variantes',

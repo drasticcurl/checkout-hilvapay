@@ -39,6 +39,8 @@ type FilaPlanFake = {
 
 let productos: Map<string, FilaProductoFake>;
 let planes: Map<string, FilaPlanFake>;
+let paginasFake: Map<string, { id: string; producto_id: string }>;
+let cobrosFake: Map<string, { id: string; producto_id: string }>;
 let siguienteId: number;
 
 function nuevoId(prefijo: string): string {
@@ -154,6 +156,21 @@ const qMock = vi.fn(async (sql: string, params: unknown[] = []) => {
     const fila = productos.get(id);
     return fila ? [fila] : [];
   }
+  if (s.startsWith('select id from paginas where producto_id = $1')) {
+    const [productoId] = params as [string];
+    const filas = Array.from(paginasFake.values()).filter((p) => p.producto_id === productoId);
+    return filas.map((p) => ({ id: p.id }));
+  }
+  if (s.startsWith('select id from cobros where producto_id = $1')) {
+    const [productoId] = params as [string];
+    const filas = Array.from(cobrosFake.values()).filter((c) => c.producto_id === productoId);
+    return filas.map((c) => ({ id: c.id }));
+  }
+  if (s.startsWith('delete from productos where id = $1')) {
+    const [id] = params as [string];
+    productos.delete(id);
+    return [];
+  }
   throw new Error(`qMock: query no reconocida: ${s}`);
 });
 
@@ -184,11 +201,13 @@ vi.mock('../whop', () => ({
   obtenerPlan: vi.fn(),
 }));
 
-import { agregarPlanAProducto, buscarProductoConPlanes, crearProductoConPlan } from './productos';
+import { agregarPlanAProducto, borrarProducto, buscarProductoConPlanes, crearProductoConPlan } from './productos';
 
 beforeEach(() => {
   productos = new Map();
   planes = new Map();
+  paginasFake = new Map();
+  cobrosFake = new Map();
   siguienteId = 1;
   qMock.mockClear();
   q1Mock.mockClear();
@@ -230,5 +249,47 @@ describe('crearProductoConPlan + agregarPlanAProducto', () => {
     await expect(
       agregarPlanAProducto(producto.id, { whop_plan_id: 'zz-plan-dup', etiqueta: 'Otra', precio: '5.00' }),
     ).rejects.toThrow('plan_ya_vinculado');
+  });
+});
+
+describe('borrarProducto', () => {
+  it('borra un producto sin links ni cobros', async () => {
+    const producto = await crearProductoConPlan({
+      nombre: 'zz-producto-sin-uso',
+      plan: { whop_plan_id: 'zz-plan-sin-uso', precio: '10.00' },
+    });
+
+    const r = await borrarProducto(producto.id);
+    expect(r).toMatchObject({ ok: true });
+    expect(productos.has(producto.id)).toBe(false);
+  });
+
+  it('no borra un producto con un link de pago apuntándole', async () => {
+    const producto = await crearProductoConPlan({
+      nombre: 'zz-producto-con-link',
+      plan: { whop_plan_id: 'zz-plan-con-link', precio: '10.00' },
+    });
+    paginasFake.set('pagina-1', { id: 'pagina-1', producto_id: producto.id });
+
+    const r = await borrarProducto(producto.id);
+    expect(r).toMatchObject({ ok: false, error: 'tiene_links' });
+    expect(productos.has(producto.id)).toBe(true);
+  });
+
+  it('no borra un producto con un cobro histórico', async () => {
+    const producto = await crearProductoConPlan({
+      nombre: 'zz-producto-con-cobro',
+      plan: { whop_plan_id: 'zz-plan-con-cobro', precio: '10.00' },
+    });
+    cobrosFake.set('cobro-1', { id: 'cobro-1', producto_id: producto.id });
+
+    const r = await borrarProducto(producto.id);
+    expect(r).toMatchObject({ ok: false, error: 'tiene_cobros' });
+    expect(productos.has(producto.id)).toBe(true);
+  });
+
+  it('devuelve no_encontrado si el producto no existe', async () => {
+    const r = await borrarProducto('zz-id-inexistente');
+    expect(r).toMatchObject({ ok: false, error: 'no_encontrado' });
   });
 });

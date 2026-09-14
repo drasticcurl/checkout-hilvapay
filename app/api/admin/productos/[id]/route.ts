@@ -13,7 +13,7 @@
  */
 import { NextResponse } from 'next/server';
 import { q } from '@/lib/db';
-import { buscarProductoConPlanes, setActivoProducto } from '../../../../../lib/admin/productos';
+import { borrarProducto, buscarProductoConPlanes, setActivoProducto } from '../../../../../lib/admin/productos';
 import type { Producto, ProductoPlan } from '../../../../../lib/tipos';
 
 // Estas dos declaraciones no son decorativas. Sin ellas, Next PRERENDERIZA el
@@ -134,4 +134,19 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
   const producto = await productoConPaginas(params.id);
   return NextResponse.json({ producto });
+}
+
+/**
+ * Borra el producto de verdad. Solo funciona si NO tiene ningún link de pago
+ * ni ningún cobro histórico (ver `borrarProducto` en `lib/admin/productos.ts`)
+ * — si tiene alguno de los dos, devuelve 409 con el motivo, para que la
+ * pantalla pueda ofrecer desactivarlo en su lugar en vez de un error crudo.
+ */
+export async function DELETE(_req: Request, { params }: { params: { id: string } }): Promise<NextResponse> {
+  const resultado = await borrarProducto(params.id);
+  if (!resultado.ok) {
+    const status = resultado.error === 'no_encontrado' ? 404 : 409;
+    return NextResponse.json({ error: resultado.error }, { status });
+  }
+  return NextResponse.json({ ok: true });
 }
