@@ -21,7 +21,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowSquareOut, Star, Warning } from '@phosphor-icons/react/ssr';
 import type { ConfigPagina, ProductoPlan } from '../../../../../lib/tipos';
-import { Aviso, Boton, Campo, Codigo, EstadoVivo, Insignia, Tarjeta, clasesControl } from '@/components/panel/ui';
+import { Aviso, Boton, Campo, Codigo, EstadoVivo, Insignia, Interruptor, Tarjeta, clasesControl } from '@/components/panel/ui';
 import { SwitchActivo } from '../../SwitchActivo';
 
 /** La forma que devuelve la API: la variante más su página resuelta. */
@@ -76,9 +76,17 @@ function VarianteCard({ plan }: { plan: PlanConPagina }): JSX.Element {
   const [timerMinutos, setTimerMinutos] = useState(
     typeof timerMinutosInicial === 'number' ? String(timerMinutosInicial) : '',
   );
-  const [enviandoTimer, setEnviandoTimer] = useState(false);
-  const [errorTimer, setErrorTimer] = useState<string | null>(null);
-  const [guardadoTimer, setGuardadoTimer] = useState(false);
+  // El resto de ConfigPagina (lib/tipos.ts): lo que CheckoutContainer lee para
+  // dibujar la página, además del timer. Los cuatro campos se guardan juntos
+  // con un solo submit — separarlos en cuatro forms como el timer no aporta
+  // nada acá porque siempre se editan como "cómo se ve este checkout", no uno
+  // por vez.
+  const [textoBoton, setTextoBoton] = useState(plan.pagina?.config?.textoBoton ?? '');
+  const [subtitulo, setSubtitulo] = useState(plan.pagina?.config?.subtitulo ?? '');
+  const [badgeSeguro, setBadgeSeguro] = useState(plan.pagina?.config?.badgeSeguro !== false);
+  const [enviandoChk, setEnviandoChk] = useState(false);
+  const [errorChk, setErrorChk] = useState<string | null>(null);
+  const [guardadoChk, setGuardadoChk] = useState(false);
 
   const [haciendoDefault, setHaciendoDefault] = useState(false);
 
@@ -154,27 +162,40 @@ function VarianteCard({ plan }: { plan: PlanConPagina }): JSX.Element {
     }
   }
 
-  async function guardarTimer(e: React.FormEvent<HTMLFormElement>): Promise<void> {
+  async function guardarCheckout(e: React.FormEvent<HTMLFormElement>): Promise<void> {
     e.preventDefault();
     if (!plan.pagina) return;
-    const valor = timerMinutos.trim();
-    if (valor !== '' && (!Number.isFinite(Number(valor)) || Number(valor) <= 0)) {
-      setErrorTimer('Tiene que ser un número de minutos mayor que 0, o vacío para apagarlo.');
+    const minutos = timerMinutos.trim();
+    if (minutos !== '' && (!Number.isFinite(Number(minutos)) || Number(minutos) <= 0)) {
+      setErrorChk('El timer tiene que ser un número de minutos mayor que 0, o vacío para apagarlo.');
       return;
     }
-    setEnviandoTimer(true);
-    setErrorTimer(null);
-    setGuardadoTimer(false);
+    setEnviandoChk(true);
+    setErrorChk(null);
+    setGuardadoChk(false);
     try {
-      // Vacío = sin timer: se borra la clave en vez de guardar un 0, para que
-      // CheckoutContainer siga el mismo camino que una página que nunca tuvo
-      // timer (`config.timerMinutos ? <Timer/> : null`).
+      // Se parte de la config actual (por si tiene alguna clave que esta
+      // pantalla no edita) y se pisan solo los cuatro campos de este form.
+      // Vacío en timer/texto/subtítulo = se borra la clave, para que
+      // CheckoutContainer tome el mismo default que una página que nunca
+      // configuró nada (`config.timerMinutos ? … : null`, `?? 'COMPRAR AHORA'`).
       const configNueva: ConfigPagina = { ...plan.pagina.config };
-      if (valor === '') {
-        delete configNueva.timerMinutos;
-      } else {
-        configNueva.timerMinutos = Number(valor);
-      }
+      if (minutos === '') delete configNueva.timerMinutos;
+      else configNueva.timerMinutos = Number(minutos);
+
+      if (textoBoton.trim() === '') delete configNueva.textoBoton;
+      else configNueva.textoBoton = textoBoton.trim();
+
+      if (subtitulo.trim() === '') delete configNueva.subtitulo;
+      else configNueva.subtitulo = subtitulo.trim();
+
+      // badgeSeguro: default true, así que solo se escribe la clave cuando se
+      // apaga. Guardar siempre `true` explícito no está mal, pero omitirlo
+      // mantiene el jsonb más chico y es coherente con cómo quedaron las
+      // páginas de antes de que este campo existiera (sin la clave).
+      if (badgeSeguro) delete configNueva.badgeSeguro;
+      else configNueva.badgeSeguro = false;
+
       // Mismo PATCH "reenviar todo" que guardarSlug: el endpoint no acepta
       // una edición parcial de config sola.
       const res = await fetch(`/api/admin/paginas/${plan.pagina.id}`, {
@@ -191,13 +212,13 @@ function VarianteCard({ plan }: { plan: PlanConPagina }): JSX.Element {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setErrorTimer(data.error ?? 'error_desconocido');
+        setErrorChk(data.error ?? 'error_desconocido');
         return;
       }
-      setGuardadoTimer(true);
+      setGuardadoChk(true);
       router.refresh();
     } finally {
-      setEnviandoTimer(false);
+      setEnviandoChk(false);
     }
   }
 
@@ -335,40 +356,91 @@ function VarianteCard({ plan }: { plan: PlanConPagina }): JSX.Element {
 
       {plan.pagina ? (
         <div className="border-t border-panel-borde pt-4">
-          <form onSubmit={guardarTimer} className="space-y-2.5">
+          <p className="mb-3 text-[13px] font-medium text-tinta">Modificar checkout</p>
+          <form onSubmit={guardarCheckout} className="space-y-3.5">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Campo
+                etiqueta="Barra de urgencia"
+                htmlFor={`plan-timer-${plan.id}`}
+                opcional
+                ayuda={
+                  timerMinutos.trim()
+                    ? `"La oferta expira en ${timerMinutos} min". No bloquea la compra al llegar a cero.`
+                    : 'Vacío = sin barra roja arriba del checkout.'
+                }
+              >
+                <input
+                  id={`plan-timer-${plan.id}`}
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  step={1}
+                  value={timerMinutos}
+                  onChange={(e) => setTimerMinutos(e.target.value)}
+                  placeholder="Minutos, ej. 15"
+                  className={clasesControl('font-mono tabular-nums')}
+                />
+              </Campo>
+              <Campo
+                etiqueta="Texto del botón"
+                htmlFor={`plan-boton-${plan.id}`}
+                opcional
+                ayuda="Vacío = &quot;COMPRAR AHORA&quot;."
+              >
+                <input
+                  id={`plan-boton-${plan.id}`}
+                  type="text"
+                  value={textoBoton}
+                  onChange={(e) => setTextoBoton(e.target.value)}
+                  placeholder="COMPRAR AHORA"
+                  className={clasesControl()}
+                />
+              </Campo>
+            </div>
+
             <Campo
-              etiqueta="Barra de urgencia"
-              htmlFor={`plan-timer-${plan.id}`}
-              className="max-w-[14rem]"
+              etiqueta="Bajada arriba del producto"
+              htmlFor={`plan-subtitulo-${plan.id}`}
               opcional
-              ayuda={
-                timerMinutos.trim()
-                  ? `Se muestra arriba del checkout: "La oferta expira en ${timerMinutos} min". No bloquea la compra cuando llega a cero.`
-                  : 'Vacío = sin barra de urgencia en este checkout.'
-              }
+              ayuda="Una línea corta que se muestra arriba del nombre del producto, en la card del checkout."
             >
               <input
-                id={`plan-timer-${plan.id}`}
-                type="number"
-                inputMode="numeric"
-                min={1}
-                step={1}
-                value={timerMinutos}
-                onChange={(e) => setTimerMinutos(e.target.value)}
-                placeholder="Sin timer"
-                className={clasesControl('font-mono tabular-nums')}
+                id={`plan-subtitulo-${plan.id}`}
+                type="text"
+                value={subtitulo}
+                onChange={(e) => setSubtitulo(e.target.value)}
+                placeholder="Sin bajada"
+                className={clasesControl()}
               />
             </Campo>
+
+            <div className="flex items-center justify-between gap-4 rounded-ctrl border border-panel-borde bg-panel-sup2/50 px-3.5 py-3">
+              <div className="min-w-0">
+                <label htmlFor={`plan-badge-${plan.id}`} className="text-[13px] font-medium text-tinta">
+                  Badge &quot;100% SEGURO&quot;
+                </label>
+                <p className="mt-0.5 text-[12px] leading-relaxed text-tinta-3">
+                  La barra verde debajo del timer, arriba de la card del producto.
+                </p>
+              </div>
+              <Interruptor
+                id={`plan-badge-${plan.id}`}
+                activo={badgeSeguro}
+                onCambiar={setBadgeSeguro}
+                etiquetaAccesible="Mostrar el badge 100% seguro en este checkout"
+              />
+            </div>
+
             <div className="flex items-center gap-3">
-              <Boton type="submit" variante="secundario" tamano="sm" disabled={enviandoTimer}>
-                {enviandoTimer ? 'Guardando…' : 'Guardar timer'}
+              <Boton type="submit" variante="secundario" tamano="sm" disabled={enviandoChk}>
+                {enviandoChk ? 'Guardando…' : 'Guardar checkout'}
               </Boton>
-              {guardadoTimer && !enviandoTimer ? (
+              {guardadoChk && !enviandoChk ? (
                 <span className="text-[12px] font-medium text-vivo-oscuro">Guardado.</span>
               ) : null}
-              {errorTimer ? (
+              {errorChk ? (
                 <span role="alert" className="text-[12px] font-medium text-peligro">
-                  No se pudo guardar ({errorTimer}).
+                  No se pudo guardar ({errorChk}).
                 </span>
               ) : null}
             </div>
