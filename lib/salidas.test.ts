@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { armarPayloadIngest, centavos, OMITIDA_SIN_ATRIBUCION, proximoIntento } from './salidas';
+import {
+  armarPayloadIngest,
+  armarPayloadVentaPanel,
+  centavos,
+  extraerUtmsLimpias,
+  OMITIDA_SIN_ATRIBUCION,
+  proximoIntento,
+} from './salidas';
 import type { Cobro, Orden, Pagina } from './tipos';
 
 // ── centavos() ────────────────────────────────────────────────────────────────
@@ -221,5 +228,189 @@ describe('armarPayloadIngest', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error('esperaba ok:true');
     expect(r.payload.events[0].value).toBe(123456789);
+  });
+
+  it('con orden.utms conteniendo las 5 UTMs, context.utms las tiene todas (T03 §6.5)', () => {
+    const r = armarPayloadIngest({
+      cobro: baseCobro(),
+      orden: baseOrden({
+        utms: {
+          utm_source: 'facebook',
+          utm_medium: 'cpc',
+          utm_campaign: 'X|123456',
+          utm_content: 'creativo-1',
+          utm_term: 'termino',
+        },
+      }),
+      pagina: basePagina(),
+      producto: baseProducto(),
+    });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('esperaba ok:true');
+    expect(r.payload.context.utms).toEqual({
+      utm_source: 'facebook',
+      utm_medium: 'cpc',
+      utm_campaign: 'X|123456',
+      utm_content: 'creativo-1',
+      utm_term: 'termino',
+    });
+  });
+
+  it('sin utms en la orden, context.utms queda undefined (no un objeto vacío)', () => {
+    const r = armarPayloadIngest({
+      cobro: baseCobro(),
+      orden: baseOrden({ utms: null }),
+      pagina: basePagina(),
+      producto: baseProducto(),
+    });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('esperaba ok:true');
+    expect(r.payload.context.utms).toBeUndefined();
+  });
+});
+
+// ── extraerUtmsLimpias() ──────────────────────────────────────────────────────
+
+describe('extraerUtmsLimpias', () => {
+  it('T03 §6.1: con utm_campaign + fbclid, devuelve solo utm_campaign (fbclid excluido)', () => {
+    const r = extraerUtmsLimpias({ utm_campaign: 'X|123456', fbclid: 'abc' });
+    expect(r).toEqual({ utm_campaign: 'X|123456' });
+  });
+
+  it('T03 §6.2: extraerUtmsLimpias(null) devuelve undefined', () => {
+    expect(extraerUtmsLimpias(null)).toBeUndefined();
+  });
+
+  it('con las 5 UTMs completas, las devuelve todas', () => {
+    const r = extraerUtmsLimpias({
+      utm_source: 'facebook',
+      utm_medium: 'cpc',
+      utm_campaign: 'X|123456',
+      utm_content: 'creativo-1',
+      utm_term: 'termino',
+      fbclid: 'abc',
+      alguna_key_desconocida: 'se ignora',
+    });
+    expect(r).toEqual({
+      utm_source: 'facebook',
+      utm_medium: 'cpc',
+      utm_campaign: 'X|123456',
+      utm_content: 'creativo-1',
+      utm_term: 'termino',
+    });
+  });
+
+  it('con un objeto sin ninguna de las 5 claves conocidas, devuelve undefined', () => {
+    expect(extraerUtmsLimpias({ fbclid: 'abc', otra: 'x' })).toBeUndefined();
+  });
+});
+
+// ── armarPayloadVentaPanel() ──────────────────────────────────────────────────
+
+describe('armarPayloadVentaPanel', () => {
+  it('T03 §6.3: sin whop_payment_id no arma el payload', () => {
+    const r = armarPayloadVentaPanel({
+      cobro: baseCobro({ whop_payment_id: null }),
+      orden: baseOrden(),
+      pagina: basePagina(),
+      producto: baseProducto(),
+    });
+
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('esperaba ok:false');
+    expect(r.motivo).toMatch(/whop_payment_id/);
+  });
+
+  it('T03 §6.4: con datos completos y session_id null, arma el payload igual (a diferencia de armarPayloadIngest)', () => {
+    const r = armarPayloadVentaPanel({
+      cobro: baseCobro(),
+      orden: baseOrden({ session_id: null, visitor_id: null }),
+      pagina: basePagina(),
+      producto: baseProducto(),
+    });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('esperaba ok:true');
+    expect(r.payload.sessionId).toBeUndefined();
+    expect(r.payload.visitorId).toBeUndefined();
+    expect(r.payload.cobroId).toBe('cobro-1');
+  });
+
+  it('sin monto no arma el payload', () => {
+    const r = armarPayloadVentaPanel({
+      cobro: baseCobro({ monto: null }),
+      orden: baseOrden(),
+      pagina: basePagina(),
+      producto: baseProducto(),
+    });
+
+    expect(r.ok).toBe(false);
+  });
+
+  it('arma cobroId, whopPlanId, monto, moneda en minúsculas y purchasedAt desde cobro.updated_at', () => {
+    const r = armarPayloadVentaPanel({
+      cobro: baseCobro({ moneda: 'USD', monto: '29.90' }),
+      orden: baseOrden(),
+      pagina: basePagina(),
+      producto: baseProducto(),
+    });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('esperaba ok:true');
+    expect(r.payload.cobroId).toBe('cobro-1');
+    expect(r.payload.whopPlanId).toBe('plan_1');
+    expect(r.payload.monto).toBe('29.90');
+    expect(r.payload.moneda).toBe('usd');
+    expect(r.payload.purchasedAt).toBe(new Date('2026-01-01T00:05:00.000Z').toISOString());
+  });
+
+  it('fbclid sale de orden.utms.fbclid tal cual, sin transformar (D6)', () => {
+    const r = armarPayloadVentaPanel({
+      cobro: baseCobro(),
+      orden: baseOrden({ utms: { utm_campaign: 'X|123456', fbclid: 'IwARtest' } }),
+      pagina: basePagina(),
+      producto: baseProducto(),
+    });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('esperaba ok:true');
+    expect(r.payload.fbclid).toBe('IwARtest');
+    expect(r.payload.utms).toEqual({ utm_campaign: 'X|123456' });
+  });
+
+  it('sin fbclid en orden.utms, el campo queda undefined (no string vacío)', () => {
+    const r = armarPayloadVentaPanel({
+      cobro: baseCobro(),
+      orden: baseOrden({ utms: { utm_campaign: 'X|123456' } }),
+      pagina: basePagina(),
+      producto: baseProducto(),
+    });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('esperaba ok:true');
+    expect(r.payload.fbclid).toBeUndefined();
+  });
+});
+
+// ── BodySchema de app/api/checkout/sesion/route.ts acepta fbclid dentro de utms ──
+
+describe('BodySchema (checkout/sesion) — fbclid dentro de utms, sin cambios de código', () => {
+  it('T03 §2: z.record(z.string()).optional() acepta fbclid como key sin .strict() ni lista cerrada', async () => {
+    // No se importa el schema real porque no se exporta desde route.ts (es un
+    // handler de Next, no un módulo de librería) — se replica la MISMA
+    // expresión de zod que declara el archivo (verificado por lectura antes
+    // de escribir este test) para confirmar el comportamiento real de zod,
+    // no una suposición. Confirma la Opción A del paso 2 de T03: no hace
+    // falta tocar el BodySchema para que fbclid viaje dentro de utms.
+    const { z } = await import('zod');
+    const utmsSchema = z.record(z.string()).optional();
+
+    const r = utmsSchema.safeParse({ utm_campaign: 'X|123456', fbclid: 'IwARtest' });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data).toEqual({ utm_campaign: 'X|123456', fbclid: 'IwARtest' });
+    }
   });
 });

@@ -12,6 +12,7 @@
  * contra 127.0.0.1 sin pasar por Caddy, autenticado con `CRON_SECRET`.
  */
 import { NextResponse } from 'next/server';
+import { armarEventoCapi, sendCapiEvent } from '@/lib/capi'; // T04: Meta Conversions API
 import { cronAutorizado } from '@/lib/cron';
 import { mandarEmailDeEntrega } from '@/lib/email';
 import {
@@ -19,6 +20,7 @@ import {
   buscarDatosParaSalida,
   marcarEnviada,
   marcarFallida,
+  reportarVentaAlPanel, // T03: contrato A, POST a /api/webhooks/checkout-propio
   tomarPendientes,
   type FilaCobroParaSalida,
 } from '@/lib/salidas';
@@ -84,18 +86,29 @@ async function procesarFila(fila: Salida, resultado: Resultado): Promise<void> {
   }
 
   const reportado = await reportarAlPanel(datos);
+  const reportadoVenta = await reportarVentaAlPanel(datos); // T03: POST a /api/webhooks/checkout-propio (contrato A) — falla independiente de reportarAlPanel (D9), pero SÍ reintenta la fila completa si falla de forma transitoria (mismo criterio que reportado).
   const email = await mandarEmailSiCorresponde(datos);
+  const capi = await reportarACapi(datos); // T04: Meta CAPI — falla independiente (D9), nunca bloquea panel ni email.
 
-  if (!reportado.ok && reportado.reintentar) {
-    // El panel falló de forma transitoria: no se marca enviada, se reintenta
-    // en el próximo ciclo con backoff. El email ya mandado (si se mandó) no se
-    // repite: `email_enviado_at` corta un segundo envío en el próximo intento.
-    await marcarFallida(fila.id, reportado.motivo ?? 'panel: fallo sin motivo detallado');
+  if ((!reportado.ok && reportado.reintentar) || (!reportadoVenta.ok && reportadoVenta.reintentar)) {
+    // El panel de tracking o el panel de ventas fallaron de forma transitoria:
+    // no se marca enviada, se reintenta en el próximo ciclo con backoff. Los
+    // dos POSTs se repiten juntos (D9 del plan: no hay forma de reintentar
+    // solo uno sin cambiar el modelo de `salidas`). El email ya mandado (si se
+    // mandó) no se repite: `email_enviado_at` corta un segundo envío en el
+    // próximo intento.
+    const motivoFallo = [
+      !reportado.ok && reportado.reintentar ? reportado.motivo : undefined,
+      !reportadoVenta.ok && reportadoVenta.reintentar ? reportadoVenta.motivo : undefined,
+    ]
+      .filter(Boolean)
+      .join(' | ');
+    await marcarFallida(fila.id, motivoFallo || 'panel: fallo sin motivo detallado');
     resultado.fallidas++;
     return;
   }
 
-  const motivo = [reportado.motivo, email.motivo].filter(Boolean).join(' | ') || undefined;
+  const motivo = [reportado.motivo, reportadoVenta.motivo, email.motivo, capi.motivo].filter(Boolean).join(' | ') || undefined;
   await marcarEnviada(fila.id, motivo);
   if (motivo) resultado.omitidas++;
   else resultado.enviadas++;
@@ -162,6 +175,39 @@ async function reportarAlPanel(datos: FilaCobroParaSalida): Promise<ResultadoPan
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/**
+ * Envuelve `armarEventoCapi` + `sendCapiEvent` (T04, lib/capi.ts) con la misma
+ * forma que ya usa `reportarAlPanel`, para que `procesarFila` los trate de
+ * forma uniforme.
+ *
+ * A diferencia de un fallo del panel (que sí reintenta), un fallo de CAPI
+ * marca `reintentar: false` siempre: la doc de Meta no da garantías de
+ * idempotencia por `event_id` duplicado del lado del servidor (la
+ * deduplicación es contra el Pixel de browser, que no existe en este
+ * checkout), así que reintentar indefinidamente arriesga mandar el mismo
+ * evento varias veces a Meta sin dedup que lo proteja. Se loguea el fallo y
+ * se sigue (D9 del plan: un fallo de CAPI no bloquea el reporte al panel).
+ */
+async function reportarACapi(datos: FilaCobroParaSalida): Promise<ResultadoPanel> {
+  const armado = armarEventoCapi(datos);
+  if (!armado.ok) {
+    return { ok: true, reintentar: false, motivo: armado.motivo };
+  }
+
+  const resultado = await sendCapiEvent(armado.evento);
+  if (resultado.ok) {
+    return { ok: true, reintentar: false };
+  }
+
+  // env_missing (sin META_PIXEL_ID/TOKEN) o error de red/Meta: en ambos casos
+  // no se reintenta (ver el comentario de arriba) — se loguea y se sigue.
+  console.warn(
+    `[cron/salidas] CAPI no enviado para cobro ${datos.cobro.id}: ` +
+      `${resultado.reason ?? resultado.error ?? 'motivo desconocido'}`,
+  );
+  return { ok: true, reintentar: false, motivo: `capi:${resultado.reason ?? resultado.error ?? 'desconocido'}` };
 }
 
 async function mandarEmailSiCorresponde(datos: FilaCobroParaSalida): Promise<{ motivo?: string }> {

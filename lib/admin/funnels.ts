@@ -26,12 +26,13 @@ export type Funnel = {
   updated_at: Date;
 };
 
-/** Un paso del funnel, con el producto ya resuelto para no pedirlo aparte. */
+/** Un paso del funnel, con la variante ya resuelta para no pedirla aparte. */
 export type PasoDeFunnel = {
   id: string;
   funnel_id: string;
   slug: string;
-  producto_id: string;
+  /** El id de `producto_planes` que cobra este paso — no el de `productos`. */
+  producto_plan_id: string;
   tipo: 'front' | 'upsell';
   orden: number;
   nombre: string | null;
@@ -40,7 +41,15 @@ export type PasoDeFunnel = {
   paso_aceptado_id: string | null;
   paso_rechazado_id: string | null;
   activo: boolean;
-  producto: { id: string; nombre: string; precio: string; moneda: string; imagen_url: string | null };
+  producto: {
+    id: string;
+    nombre: string;
+    /** La etiqueta de la variante ("Precio completo", "Downsell"). */
+    etiqueta: string;
+    precio: string;
+    moneda: string;
+    imagen_url: string | null;
+  };
   /**
    * Segundos que el snippet le dice al `loader.js` que espere antes de mostrar
    * el botón — pensado para que el botón aparezca debajo de un VSL a un punto
@@ -87,8 +96,11 @@ type FilaPaso = {
   paso_rechazado_id: string | null;
   activo: boolean;
   config: { delaySegundos?: number } | null;
+  /** El id de `producto_planes` resuelto — nunca null en una fila nueva; puede serlo en una legacy sin migrar. */
+  plan_id: string | null;
   prod_id: string;
   prod_nombre: string;
+  prod_etiqueta: string;
   prod_precio: string;
   prod_moneda: string;
   prod_imagen_url: string | null;
@@ -101,14 +113,20 @@ type FilaPaso = {
  * join por plan no resuelve nada, cae al join directo por `producto_id` de
  * siempre — la migración 010 ya puebla `producto_plan_id` para toda página
  * existente, pero esta doble resolución es la red de seguridad para lo que no
- * cubrió esa migración de datos.
+ * cubrió esa migración de datos. Desde la migración 012, `pg.producto_id`
+ * sigue existiendo en la tabla pero el editor ya no lo usa como identidad del
+ * paso — la identidad es `producto_plan_id` (la VARIANTE), y `plan_id` es el
+ * `producto_planes.id` que se resolvió, sea por el link directo o por el
+ * fallback legacy.
  */
 const SELECT_PASOS = `
   select pg.id, pg.funnel_id, pg.slug, pg.producto_id, pg.producto_plan_id, pg.tipo, pg.orden, pg.nombre,
          pg.url_externa, pg.permite_rechazo, pg.paso_aceptado_id, pg.paso_rechazado_id, pg.activo,
          pg.config,
+         coalesce(pp.id, pr_directo_legacy.id) as plan_id,
          coalesce(pp.producto_id, pr_directo.id) as prod_id,
          coalesce(pr_via_plan.nombre, pr_directo.nombre) as prod_nombre,
+         coalesce(pp.etiqueta, pr_directo_legacy.etiqueta, 'Precio completo') as prod_etiqueta,
          coalesce(pp.precio, pr_directo_legacy.precio) as prod_precio,
          coalesce(pp.moneda, pr_directo_legacy.moneda) as prod_moneda,
          coalesce(pr_via_plan.imagen_url, pr_directo.imagen_url) as prod_imagen_url
@@ -124,7 +142,7 @@ function filaAPaso(f: FilaPaso): PasoDeFunnel {
     id: f.id,
     funnel_id: f.funnel_id,
     slug: f.slug,
-    producto_id: f.producto_id,
+    producto_plan_id: f.plan_id ?? '',
     tipo: f.tipo,
     orden: f.orden,
     nombre: f.nombre,
@@ -144,6 +162,7 @@ function filaAPaso(f: FilaPaso): PasoDeFunnel {
     producto: {
       id: f.prod_id,
       nombre: f.prod_nombre,
+      etiqueta: f.prod_etiqueta,
       // numeric vuelve como string del driver, pero por si el caller lo pasa
       // por json_build_object en otro lado, se normaliza igual (misma cautela
       // que lib/admin/paginas.ts).
@@ -179,15 +198,40 @@ export async function buscarFunnelConPasos(id: string): Promise<FunnelConPasos |
   return { ...funnel, pasos: filas.map(filaAPaso) };
 }
 
+/** Una variante de precio, tal como la necesita el selector del editor de funnels. */
+export type VarianteParaSelector = {
+  /** El id de `producto_planes`, no de `productos` — es lo que ahora identifica al paso. */
+  id: string;
+  /** El nombre del PRODUCTO (no de la variante): "Shot Metabólico", no "Downsell". */
+  nombre: string;
+  /** La etiqueta de la variante ("Precio completo", "Downsell"), para distinguir dos precios del mismo producto en el selector. */
+  etiqueta: string;
+  precio: string;
+  moneda: string;
+  imagen_url: string | null;
+};
+
 /**
- * Lo que necesita el editor para el selector de "Producto": todos los
- * productos vinculados, sin filtrar por activo — un producto apagado igual se
- * puede planear en un funnel que todavía no se enciende.
+ * Lo que necesita el editor para el selector "Producto": cada VARIANTE de
+ * precio (`producto_planes`), no cada producto — un producto con dos precios
+ * (completo/downsell) son dos entradas distintas en este selector, porque son
+ * dos links de pago distintos y el editor elige cuál cobra cada paso.
+ *
+ * Sin filtrar por activo — una variante apagada igual se puede planear en un
+ * funnel que todavía no se enciende. Ordenado por precio ascendente y no por
+ * nombre: con varios productos mezclados en la lista, ordenar por precio hace
+ * que las ofertas se lean de más baratas a más caras, que es como se piensa un
+ * funnel (front barato → upsells más caros) y evita que dos variantes del
+ * mismo producto ("$17 - Shot Metabólico (Downsell)" y "$27 - Shot Metabólico")
+ * queden mezcladas entre productos distintos en vez de together.
  */
-export async function productosParaSelector(): Promise<
-  { id: string; nombre: string; precio: string; moneda: string }[]
-> {
-  return q(`select id, nombre, precio, moneda from productos order by nombre`);
+export async function productosParaSelector(): Promise<VarianteParaSelector[]> {
+  return q(
+    `select pp.id, pr.nombre, pp.etiqueta, pp.precio, pp.moneda, pr.imagen_url
+       from producto_planes pp
+       join productos pr on pr.id = pp.producto_id
+      order by pp.precio asc, pr.nombre asc`,
+  );
 }
 
 // ── Guardado ─────────────────────────────────────────────────────────────────
@@ -196,8 +240,15 @@ export async function productosParaSelector(): Promise<
 export type EntradaPaso = {
   /** `null` para un paso nuevo. Si viene, tiene que pertenecer a este funnel. */
   id: string | null;
+  /**
+   * El slug ya viene generado por el formulario (`generarSlugConSufijo`,
+   * nunca lo tipea el usuario) — pero solo se USA cuando el paso crea una
+   * página nueva. Si la variante elegida ya tiene una página, `guardarFunnel`
+   * conserva el slug que esa página ya tenía publicado, no lo pisa.
+   */
   slug: string;
-  producto_id: string;
+  /** El id de `producto_planes`: qué VARIANTE cobra este paso, no qué producto. */
+  producto_plan_id: string;
   tipo: 'front' | 'upsell';
   orden: number;
   nombre: string | null;
@@ -222,7 +273,18 @@ export type EntradaFunnel = {
 
 export type ResultadoGuardado =
   | { ok: true; id: string }
-  | { ok: false; error: 'sin_pasos' | 'sin_front' | 'dos_front' | 'ciclo' | 'slug_ocupado' | 'datos_invalidos'; detalle?: string };
+  | {
+      ok: false;
+      error:
+        | 'sin_pasos'
+        | 'sin_front'
+        | 'dos_front'
+        | 'ciclo'
+        | 'slug_ocupado'
+        | 'plan_ya_tiene_pagina'
+        | 'datos_invalidos';
+      detalle?: string;
+    };
 
 /**
  * Valida y guarda el funnel entero: alta si `id` es `null`, edición si no.
@@ -243,10 +305,16 @@ export async function guardarFunnel(id: string | null, datos: EntradaFunnel): Pr
   if (fronts.length > 1) return { ok: false, error: 'dos_front' };
 
   for (const p of datos.pasos) {
-    if (!p.producto_id) return { ok: false, error: 'datos_invalidos', detalle: 'falta el producto de un paso' };
+    if (!p.producto_plan_id) {
+      return { ok: false, error: 'datos_invalidos', detalle: 'falta la variante de precio de un paso' };
+    }
     // El slug es obligatorio en TODOS los pasos, no solo en el front: en un
     // upsell es lo que el botón del funnel pone en `data-hilvana-upsell`, así
-    // que sin slug el paso es imposible de cablear del lado del funnel.
+    // que sin slug el paso es imposible de cablear del lado del funnel. Nunca
+    // lo tipea el usuario (lo genera `FormularioPaso.tsx` con
+    // `generarSlugConSufijo`), pero sigue siendo obligatorio como INPUT: si
+    // la variante ya tiene una página, este valor se descarta y se conserva
+    // el slug que esa página ya tenía (ver la nota en la primera pasada).
     if ((p.slug ?? '').trim() === '') {
       return { ok: false, error: 'datos_invalidos', detalle: `al paso "${p.nombre ?? '(sin nombre)'}" le falta el slug` };
     }
@@ -298,36 +366,45 @@ export async function guardarFunnel(id: string | null, datos: EntradaFunnel): Pr
       }
 
       // Primera pasada: alta o update de cada paso, SIN las flechas todavía —
-      // un paso nuevo no tiene id hasta este insert, y las flechas pueden
-      // apuntar a otro paso nuevo de la misma lista.
+      // un paso nuevo no tiene id hasta este insert (o hasta que se resuelva
+      // el reuso de abajo), y las flechas pueden apuntar a otro paso nuevo de
+      // la misma lista.
       //
-      // `producto_plan_id` se resuelve por subquery a la variante DEFAULT del
-      // producto que llegó en `p.producto_id` — el formulario del editor
-      // (`FormularioPaso.tsx`, T04/T05) sigue mandando `producto_id`, no
-      // `producto_plan_id` directo, así que acá es donde se traduce uno al
-      // otro. Si el producto no tiene ninguna variante default (no debería
-      // pasar: el índice `producto_planes_un_default_idx` más la migración 010
-      // garantizan una por producto), la subquery da NULL y el paso queda sin
-      // `producto_plan_id` — visible en la base, no un cobro silenciosamente
-      // mal resuelto.
+      // Migración 012 (D8 de la sesión: "1 link de pago por variante"): un
+      // paso YA NO crea una página nueva por el solo hecho de ser nuevo en
+      // ESTE funnel. Antes de insertar, se busca si la VARIANTE elegida
+      // (`p.producto_plan_id`) ya tiene una página en cualquier lado del
+      // sistema — creada desde catálogo, desde otro funnel, o desde este
+      // mismo funnel antes de sacarla. Si existe, se REUTILIZA esa fila
+      // (se le actualiza tipo/orden/nombre/etc. y se la reconecta a este
+      // funnel) en vez de violar `paginas_producto_plan_idx` con un INSERT
+      // nuevo. El slug que ya tenía esa página NO se pisa con el que mandó el
+      // formulario: un link ya puede estar publicado en el funnel externo con
+      // ese slug, y cambiarlo solo porque se reasignó el paso rompería ese
+      // botón sin ningún aviso.
       const idsPorIndice: string[] = [];
       for (let i = 0; i < datos.pasos.length; i++) {
         const p = datos.pasos[i];
-        const slug = normalizarSlug(p.slug);
+        const slugNuevo = normalizarSlug(p.slug);
 
         if (p.id) {
+          // Paso que ya existía como fila de `paginas`: se edita esa fila
+          // directo. Si el operador cambió la variante del paso (elige otro
+          // precio para el mismo lugar del funnel), `producto_plan_id` se
+          // actualiza tal cual — el índice único es quien avisa si esa otra
+          // variante ya tiene página en OTRO lado (`plan_ya_tiene_pagina`,
+          // más abajo).
           await c.query(
             `update paginas
-                set slug = $1, producto_id = $2, tipo = $3, orden = $4, nombre = $5,
-                    url_externa = $6, permite_rechazo = $7, funnel_id = $8,
+                set producto_id = (select producto_id from producto_planes where id = $1),
+                    producto_plan_id = $1, tipo = $2, orden = $3, nombre = $4,
+                    url_externa = $5, permite_rechazo = $6, funnel_id = $7,
                     config = jsonb_set(coalesce(config, '{}'::jsonb), '{delaySegundos}',
-                      $9::jsonb, true),
-                    producto_plan_id = (select id from producto_planes where producto_id = $2 and es_default),
+                      $8::jsonb, true),
                     updated_at = now()
-              where id = $10`,
+              where id = $9`,
             [
-              slug,
-              p.producto_id,
+              p.producto_plan_id,
               p.tipo,
               p.orden,
               p.nombre,
@@ -339,27 +416,65 @@ export async function guardarFunnel(id: string | null, datos: EntradaFunnel): Pr
             ],
           );
           idsPorIndice.push(p.id);
-        } else {
-          const fila = await c.query<{ id: string }>(
-            `insert into paginas (slug, producto_id, tipo, orden, nombre, url_externa,
-                                  permite_rechazo, funnel_id, config, activo, producto_plan_id)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, false,
-                     (select id from producto_planes where producto_id = $2 and es_default))
-             returning id`,
+          continue;
+        }
+
+        // Paso nuevo (sin id): ¿la variante ya tiene una página en algún
+        // lado? `for update` para que dos guardados concurrentes eligiendo la
+        // misma variante nueva no lean las dos "no existe" y las dos
+        // intenten insertar — el segundo espera al primero y relee.
+        const existente = await c.query<{ id: string }>(
+          'select id from paginas where producto_plan_id = $1 for update',
+          [p.producto_plan_id],
+        );
+
+        if (existente.rows.length > 0) {
+          const paginaId = existente.rows[0].id;
+          // Se reusa la fila: tipo/orden/nombre/etc. de ESTE paso, pero el
+          // slug es el que la página ya tenía — no se toca acá a propósito.
+          await c.query(
+            `update paginas
+                set producto_id = (select producto_id from producto_planes where id = $1),
+                    tipo = $2, orden = $3, nombre = $4, url_externa = $5,
+                    permite_rechazo = $6, funnel_id = $7,
+                    config = jsonb_set(coalesce(config, '{}'::jsonb), '{delaySegundos}',
+                      $8::jsonb, true),
+                    updated_at = now()
+              where id = $9`,
             [
-              slug,
-              p.producto_id,
+              p.producto_plan_id,
               p.tipo,
               p.orden,
               p.nombre,
               p.url_externa,
               p.permite_rechazo,
               funnelId,
-              JSON.stringify(p.delay_segundos ? { delaySegundos: p.delay_segundos } : {}),
+              JSON.stringify(p.delay_segundos ?? null),
+              paginaId,
             ],
           );
-          idsPorIndice.push(fila.rows[0].id);
+          idsPorIndice.push(paginaId);
+          continue;
         }
+
+        const fila = await c.query<{ id: string }>(
+          `insert into paginas (slug, producto_id, producto_plan_id, tipo, orden, nombre, url_externa,
+                                permite_rechazo, funnel_id, config, activo)
+           values ($1, (select producto_id from producto_planes where id = $2), $2, $3, $4, $5, $6, $7, $8, $9::jsonb, false)
+           returning id`,
+          [
+            slugNuevo,
+            p.producto_plan_id,
+            p.tipo,
+            p.orden,
+            p.nombre,
+            p.url_externa,
+            p.permite_rechazo,
+            funnelId,
+            JSON.stringify(p.delay_segundos ? { delaySegundos: p.delay_segundos } : {}),
+          ],
+        );
+        idsPorIndice.push(fila.rows[0].id);
       }
 
       // Segunda pasada: ahora que todos los pasos tienen id, se resuelven los
@@ -425,6 +540,7 @@ export async function guardarFunnel(id: string | null, datos: EntradaFunnel): Pr
     const mensaje = err instanceof Error ? err.message : String(err);
     if (mensaje.includes('paginas_slug_idx')) return { ok: false, error: 'slug_ocupado' };
     if (mensaje.includes('paginas_un_front_por_funnel')) return { ok: false, error: 'dos_front' };
+    if (mensaje.includes('paginas_producto_plan_idx')) return { ok: false, error: 'plan_ya_tiene_pagina' };
     if (mensaje.includes('paginas_no_autoreferencia')) {
       return { ok: false, error: 'ciclo', detalle: 'un paso no puede apuntarse a sí mismo' };
     }

@@ -43,6 +43,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { q, q1 } from '@/lib/db';
 import { crearCheckoutConfiguration, WhopError } from '@/lib/whop';
+import { utmsParaMetadataWhop } from '@/lib/metadata-whop';
 import type { Orden, PaginaConProducto, RespuestaSesion } from '@/lib/tipos';
 import { comoUuidONull, normalizarEmail } from '@/components/checkout/utils';
 
@@ -87,6 +88,15 @@ const BodySchema = z.object({
   email: z.string().trim().email().max(320).optional(),
   sessionId: z.string().optional(),
   visitorId: z.string().optional(),
+  /**
+   * `utms` acepta CUALQUIER key string, no una lista cerrada (sin
+   * `.strict()`): por eso `fbclid` viaja acá como `utms.fbclid`, sin que este
+   * schema necesite cambiar (T03-utms-checkout-kashhhpay.md §2, Opción A —
+   * confirmado con un test antes de asumirlo, ver `lib/salidas.test.ts`
+   * "BodySchema (checkout/sesion) — fbclid dentro de utms"). Ver el
+   * comentario de `Orden.utms` en lib/tipos.ts para la decisión completa de
+   * dónde vive fbclid.
+   */
   utms: z.record(z.string()).optional(),
   /** Modo recuperación: la orden existente cuyo token ya se validó en el server component. */
   ordenIdRecuperacion: z.string().uuid().optional(),
@@ -166,7 +176,11 @@ export async function POST(req: Request): Promise<Response> {
     try {
       cfg = await crearCheckoutConfiguration({
         planId: fila.whop_plan_id as string,
-        metadata: { orden_id: orden.id },
+        // T05 (plan panel-y-capi, D10): las UTMs/fbclid de la orden viajan
+        // como redundancia informativa en metadata — la fuente de verdad
+        // sigue siendo orden.utms en la base propia, esto es solo para que
+        // se vean si alguien mira el Payment en Whop directamente.
+        metadata: { orden_id: orden.id, ...utmsParaMetadataWhop(orden.utms) },
         // Recuperación: el comprador está acá porque el cobro off-session falló,
         // y va a autenticarse igual. `mandate_challenge` aprovecha ese desafío
         // para dejar el mandato establecido, así el paso SIGUIENTE del funnel sí
@@ -214,6 +228,9 @@ export async function POST(req: Request): Promise<Response> {
   //    checkout configuration no hay nada que crear del lado de Whop antes de
   //    mostrar el embed. El `planId` sale directo de la página, no de una
   //    respuesta de Whop.
+  //    `body.utms` se guarda TAL CUAL, sin tocar `fbclid` si viene dentro:
+  //    ese campo se persiste crudo (D6 del plan) y se lee más adelante desde
+  //    `orden.utms?.fbclid` en `lib/salidas.ts` (armarPayloadVentaPanel).
   const [orden] = await q<{ id: string }>(
     `insert into ordenes (pagina_id, email, nombre, token, token_expira_at, session_id, visitor_id, utms)
      values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)

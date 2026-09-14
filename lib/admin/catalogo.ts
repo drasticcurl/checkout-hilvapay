@@ -270,6 +270,12 @@ export async function vincularPlan(entrada: EntradaVinculo): Promise<ResultadoVi
     const mensaje = err instanceof Error ? err.message : String(err);
     if (/paginas_slug_idx/.test(mensaje)) return { ok: false, error: 'slug_ocupado' };
     if (/producto_planes_whop_plan_idx/.test(mensaje)) return { ok: false, error: 'plan_ya_vinculado' };
+    // No debería poder pasar en este flujo: `producto_plan_id` siempre es una
+    // fila insertada DENTRO de esta misma transacción, así que ninguna página
+    // previa puede estar apuntándole todavía. Se captura igual como defensa en
+    // profundidad (§ D8 de la sesión "1 link por variante") en vez de dejar
+    // que un 500 genérico llegue a la pantalla si algún día este flujo cambia.
+    if (/paginas_producto_plan_idx/.test(mensaje)) return { ok: false, error: 'plan_ya_vinculado' };
     throw err;
   }
 }

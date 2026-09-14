@@ -38,6 +38,7 @@ import { resolverToken } from '@/lib/token';
 import { q1 } from '@/lib/db';
 import { crearLimitador, ipDelRequest } from '@/lib/rate-limit';
 import { crearCheckoutConfiguration, WhopError } from '@/lib/whop';
+import { utmsParaMetadataWhop } from '@/lib/metadata-whop';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -133,7 +134,11 @@ export async function POST(req: Request): Promise<Response> {
   try {
     cfg = await crearCheckoutConfiguration({
       planId: pagina.whop_plan_id,
-      metadata: { orden_id: orden.id, pagina_id: pagina.id },
+      // T05 (plan panel-y-capi, D10): las UTMs/fbclid de la orden viajan como
+      // redundancia informativa en metadata — la fuente de verdad sigue
+      // siendo orden.utms en la base propia (lib/salidas.ts, lib/capi.ts),
+      // esto es solo para que se vean si alguien mira el Payment en Whop.
+      metadata: { orden_id: orden.id, pagina_id: pagina.id, ...utmsParaMetadataWhop(orden.utms) },
       // `null` para dejar que decida el default de la cuenta. Acá el comprador
       // ESTÁ presente y el wallet resuelve la autenticación solo, así que no hay
       // motivo para forzar ni pedir un desafío extra.

@@ -24,7 +24,7 @@ export default async function EditarFunnelPage({
 }: {
   params: { id: string };
 }): Promise<JSX.Element> {
-  const [funnel, productos, origenes] = await Promise.all([
+  const [funnel, variantes, origenes] = await Promise.all([
     buscarFunnelConPasos(params.id),
     productosParaSelector(),
     listarOrigenes(),
@@ -59,7 +59,7 @@ export default async function EditarFunnelPage({
         titulo={funnel.nombre}
         descripcion="El orden de la pila es el orden del funnel. Cada rama decide a dónde sigue el comprador."
       />
-      <EditorFunnel funnel={funnel} productos={productos} />
+      <EditorFunnel funnel={funnel} variantes={variantes} />
       <ComoIntegrar integracion={integracion} origenesAutorizados={origenesAutorizados} />
     </div>
   );

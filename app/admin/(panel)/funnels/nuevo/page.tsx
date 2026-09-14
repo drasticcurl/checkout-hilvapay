@@ -17,7 +17,7 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export default async function NuevoFunnelPage(): Promise<JSX.Element> {
-  const productos = await productosParaSelector();
+  const variantes = await productosParaSelector();
 
   return (
     <div className="space-y-6">
@@ -26,7 +26,7 @@ export default async function NuevoFunnelPage(): Promise<JSX.Element> {
         titulo="Nuevo funnel"
         descripcion="Empezá por el producto principal y agregá los upsells debajo. Nada cobra hasta que lo enciendas."
       />
-      {productos.length === 0 ? (
+      {variantes.length === 0 ? (
         <EstadoVacio
           icono={<Package size={20} aria-hidden="true" />}
           titulo="Falta vincular un producto"
@@ -38,7 +38,7 @@ export default async function NuevoFunnelPage(): Promise<JSX.Element> {
           }
         />
       ) : (
-        <AsistenteFunnel productos={productos} />
+        <AsistenteFunnel variantes={variantes} />
       )}
     </div>
   );

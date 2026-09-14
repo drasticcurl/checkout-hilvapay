@@ -4,6 +4,7 @@ import { q } from '../../../../../lib/db';
 import type { ProductoPlan } from '../../../../../lib/tipos';
 import { EncabezadoPantalla } from '../../../../../components/panel/ui';
 import { Volver } from '../../../../../components/panel/Volver';
+import { Pestanas } from '../../../../../components/panel/Pestanas';
 import { DatosProducto } from './DatosProducto';
 import { ListaVariantes, type PlanConPagina } from './ListaVariantes';
 import { AgregarVariante } from './AgregarVariante';
@@ -35,7 +36,18 @@ type FilaPagina = {
   producto_plan_id: string;
 };
 
-/** La página (link) que cobra cada variante, resuelta en un solo round-trip. */
+/**
+ * La página (link) que cobra cada variante, resuelta en un solo round-trip.
+ *
+ * Desde la migración 012 (`paginas_producto_plan_idx`), la base garantiza que
+ * cada variante tiene A LO SUMO una página — el `if (!mapa.has(...))` de
+ * abajo ya no es "ocultar duplicados silenciosamente" (lo era antes de esa
+ * migración, y era el bug que reportó el usuario), sino una defensa que ya
+ * no debería activarse nunca: si se activara, sería porque el índice único
+ * se violó por fuera de esta app (una migración de datos a mano, por
+ * ejemplo), y en ese caso mostrar la más reciente sigue siendo mejor que
+ * tirar un error.
+ */
 async function paginasPorVariante(productoPlanIds: string[]): Promise<Map<string, FilaPagina>> {
   if (productoPlanIds.length === 0) return new Map();
   const filas = await q<FilaPagina>(
@@ -72,31 +84,42 @@ export default async function EditarProductoPage({
   );
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <Volver href="/admin/productos">Productos</Volver>
       <EncabezadoPantalla
         titulo={producto.nombre}
-        descripcion="Nombre, foto y descripción son del producto. Cada variante de abajo tiene su propio precio y su propio link de pago."
+        descripcion="Nombre, foto y descripción son del producto. Cada variante tiene su propio precio y su propio link de pago."
       />
 
-      <DatosProducto producto={producto} />
+      <Pestanas
+        pestanas={[
+          {
+            id: 'datos',
+            etiqueta: 'Datos',
+            contenido: <DatosProducto producto={producto} />,
+          },
+          {
+            id: 'variantes',
+            etiqueta: `Variantes de precio (${planes.length})`,
+            contenido: (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-end gap-3">
+                  <AgregarVariante productoId={producto.id} whopProductId={producto.whop_product_id} />
+                </div>
 
-      <div className="space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-[15px] font-semibold text-tinta">
-            Variantes de precio <span className="text-tinta-3">({planes.length})</span>
-          </h2>
-          <AgregarVariante productoId={producto.id} whopProductId={producto.whop_product_id} />
-        </div>
-
-        {planes.length === 0 ? (
-          <p className="text-[13px] text-tinta-3">
-            Este producto no tiene ninguna variante de precio todavía. Agregá una con el botón de arriba.
-          </p>
-        ) : (
-          <ListaVariantes planes={planes} />
-        )}
-      </div>
+                {planes.length === 0 ? (
+                  <p className="text-[13px] text-tinta-3">
+                    Este producto no tiene ninguna variante de precio todavía. Agregá una con el botón de
+                    arriba.
+                  </p>
+                ) : (
+                  <ListaVariantes planes={planes} />
+                )}
+              </div>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }

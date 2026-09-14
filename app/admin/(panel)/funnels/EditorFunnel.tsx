@@ -29,11 +29,12 @@ import {
 import { FormularioPaso, type PasoEditor } from './FormularioPaso';
 import { SelectorDestino } from './SelectorDestino';
 
-type ProductoSelector = { id: string; nombre: string; precio: string; moneda: string };
+/** Una VARIANTE de precio (`producto_planes`), no un producto — ver la nota de `FormularioPaso.tsx`. */
+type VarianteSelector = { id: string; nombre: string; etiqueta: string; precio: string; moneda: string };
 
 type Props = {
   funnel: FunnelConPasos | null;
-  productos: ProductoSelector[];
+  variantes: VarianteSelector[];
 };
 
 function formatearPrecio(precio: string, moneda: string): string {
@@ -47,7 +48,7 @@ function pasosAEditor(funnel: FunnelConPasos | null): PasoEditor[] {
   return funnel.pasos.map((p) => ({
     id: p.id,
     slug: p.slug,
-    producto_id: p.producto_id,
+    producto_plan_id: p.producto_plan_id,
     tipo: p.tipo,
     nombre: p.nombre,
     url_externa: p.url_externa,
@@ -75,7 +76,7 @@ function pasosAEditor(funnel: FunnelConPasos | null): PasoEditor[] {
  * ramas. Antes eso se decidía por `indice === 0`, y un funnel a medio armar con
  * el front en el medio dejaba las ramas de un upsell fuera de alcance.
  */
-export function EditorFunnel({ funnel, productos }: Props): JSX.Element {
+export function EditorFunnel({ funnel, variantes }: Props): JSX.Element {
   const router = useRouter();
   const [nombre, setNombre] = useState(funnel?.nombre ?? 'Nuevo funnel');
   const [urlGracias, setUrlGracias] = useState(funnel?.url_gracias ?? '');
@@ -123,7 +124,7 @@ export function EditorFunnel({ funnel, productos }: Props): JSX.Element {
         pasos: pasos.map((p) => ({
           id: p.id,
           slug: p.slug,
-          producto_id: p.producto_id,
+          producto_plan_id: p.producto_plan_id,
           tipo: p.tipo,
           // El orden visual es la posición en el array: es lo único que define
           // "orden" en la migración 003, nunca el flujo.
@@ -317,7 +318,7 @@ export function EditorFunnel({ funnel, productos }: Props): JSX.Element {
       {editandoIndice !== null ? (
         <FormularioPaso
           paso={editandoIndice === 'nuevo' ? null : pasos[editandoIndice]}
-          productos={productos}
+          variantes={variantes}
           // Un segundo `front` viola el índice único de la migración 003; se lo
           // saca del selector de tipo en vez de dejar que el guardado lo
           // rechace después de haber pedido todos los otros datos.
@@ -365,6 +366,8 @@ function traducirError(codigo: string | undefined): string {
       return 'Solo puede haber un paso "Producto principal" por funnel.';
     case 'slug_ocupado':
       return 'Uno de los slugs ya está usado por otro link. Elegí otro.';
+    case 'plan_ya_tiene_pagina':
+      return 'Una de las variantes elegidas ya tiene un link de pago en otro lado. Recargá la pantalla: el link existente se va a reusar solo.';
     case 'ciclo':
       return 'Hay un ciclo en las flechas configuradas.';
     default:

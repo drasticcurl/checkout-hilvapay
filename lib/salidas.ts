@@ -7,6 +7,7 @@
  */
 import { q, q1, qCount } from './db';
 import type { Cobro, Orden, Pagina, Salida } from './tipos';
+import type { PayloadVentaCheckoutPropio } from './capi-tipos';
 
 /** Cuántas veces se reintenta una fila antes de dejarla en paz (sin borrarla). */
 export const MAX_INTENTOS = 10;
@@ -249,7 +250,23 @@ export type PayloadIngest = {
   visitorId: string;
   variant: string;
   events: EventoIngest[];
-  context: { path: string };
+  context: {
+    path: string;
+    /**
+     * Nuevo (00-PLAN-PANEL-Y-CAPI.md §6, contrato C). T03 lo llena en
+     * armarPayloadIngest(). Opcional: el schema de destino (dashboard-admin
+     * lib/ingest/schema.ts, contextSchema) ya lo esperaba como opcional antes
+     * de este cambio, así que agregar el campo no rompe ningún consumidor
+     * existente que no lo mande.
+     */
+    utms?: {
+      utm_source?: string;
+      utm_medium?: string;
+      utm_campaign?: string;
+      utm_content?: string;
+      utm_term?: string;
+    };
+  };
 };
 
 /** Resultado de intentar armar el payload: o el payload, o el motivo de por qué no se armó. */
@@ -265,6 +282,39 @@ export type ResultadoArmadoIngest = { ok: true; payload: PayloadIngest } | { ok:
  */
 export function centavos(monto: string | number): number {
   return Math.round(Number(monto) * 100);
+}
+
+/**
+ * Extrae las 5 UTMs conocidas de `orden.utms` (jsonb libre) hacia la forma que
+ * espera `PayloadIngest.context.utms`. Claves desconocidas se ignoran (mismo
+ * criterio que dashboard-admin `lib/ingest/schema.ts`: strip-by-default).
+ *
+ * `fbclid` NO se incluye acá a propósito: confirmado leyendo
+ * dashboard-admin/lib/ingest/schema.ts (`utmSchema`) — ese schema SÍ acepta
+ * `fbclid` como key de `utms`, pero el contrato C de este módulo
+ * (00-PLAN-PANEL-Y-CAPI.md §6) solo extiende `context.utms` con las 5 UTMs de
+ * campaña. `fbclid` no es una "UTM" para el tracking de embudo, es el dato que
+ * viaja por el contrato A (`armarPayloadVentaPanel`, más abajo) hacia el
+ * endpoint de venta — mezclar los dos caminos de lectura del mismo dato es
+ * justo lo que D10 del plan pide evitar.
+ *
+ * Si `orden.utms` es `null` o no tiene ninguna de las 5 claves, devuelve
+ * `undefined` (no un objeto con 5 strings vacíos): es opcional en el contrato
+ * a propósito, y un objeto vacío podría confundirse con "vino pero está
+ * vacío" del lado del schema de destino.
+ */
+export function extraerUtmsLimpias(
+  utms: Record<string, string> | null,
+): PayloadIngest['context']['utms'] {
+  if (!utms) return undefined;
+
+  const limpias: NonNullable<PayloadIngest['context']['utms']> = {};
+  for (const clave of ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term'] as const) {
+    const valor = utms[clave];
+    if (valor) limpias[clave] = valor;
+  }
+
+  return Object.keys(limpias).length > 0 ? limpias : undefined;
 }
 
 /**
@@ -310,7 +360,143 @@ export function armarPayloadIngest(
           stepSlug: pagina.slug,
         },
       ],
-      context: { path: `/pagos/${pagina.slug}` },
+      context: {
+        path: `/pagos/${pagina.slug}`,
+        utms: extraerUtmsLimpias(orden.utms),
+      },
     },
   };
+}
+
+// ── Contrato A: el payload que se postea a POST /api/webhooks/checkout-propio ──
+
+/** Resultado de intentar armar el payload del contrato A: o el payload, o el motivo. */
+export type ResultadoArmadoVentaPanel =
+  | { ok: true; payload: PayloadVentaCheckoutPropio }
+  | { ok: false; motivo: string };
+
+/**
+ * Arma el payload para `POST /api/webhooks/checkout-propio` (T02), a partir de
+ * los mismos datos que ya usa `armarPayloadIngest`. A diferencia de esa
+ * función, ESTA NO exige `session_id`/`visitor_id` (son opcionales en el
+ * contrato A) — una venta real no puede desaparecer del dashboard de
+ * facturación solo porque no se pudo atar a una sesión de tracking (criterio
+ * §9.5 del plan).
+ *
+ * Solo exige `cobro.whop_payment_id` y `cobro.monto` (mismas reglas 2 y 3 de
+ * `armarPayloadIngest`, reusadas acá: sin esos dos no hay venta real que
+ * reportar).
+ */
+export function armarPayloadVentaPanel(datos: FilaCobroParaSalida): ResultadoArmadoVentaPanel {
+  const { cobro, orden, producto } = datos;
+
+  if (!cobro.whop_payment_id) {
+    return { ok: false, motivo: 'omitida: el cobro no tiene whop_payment_id todavía' };
+  }
+  if (cobro.monto == null) {
+    return { ok: false, motivo: 'omitida: el cobro no tiene monto' };
+  }
+
+  return {
+    ok: true,
+    payload: {
+      cobroId: cobro.id,
+      whopPlanId: cobro.whop_plan_id,
+      email: orden.email,
+      monto: cobro.monto,
+      moneda: (cobro.moneda ?? producto.moneda).toLowerCase(),
+      purchasedAt: cobro.updated_at.toISOString(),
+      utms: extraerUtmsLimpias(orden.utms) ?? {},
+      // Crudo, sin transformar a `fbc` (D6: eso lo hace lib/capi.ts). Vive
+      // dentro de orden.utms como una key más — ver el comentario de
+      // `Orden.utms` en lib/tipos.ts para la decisión completa.
+      fbclid: orden.utms?.fbclid || undefined,
+      sessionId: orden.session_id ?? undefined,
+      visitorId: orden.visitor_id ?? undefined,
+    },
+  };
+}
+
+/** Timeout duro para el POST al panel de ventas: mismo criterio que el de tracking. */
+const TIMEOUT_PANEL_VENTAS_MS = 5_000;
+
+/** Mismo tipo de resultado que ya usa el cron para `reportarAlPanel`, para tratarlas de forma uniforme. */
+export type ResultadoPanelVentas = { ok: boolean; reintentar: boolean; motivo?: string };
+
+/**
+ * Postea el contrato A a `POST /api/webhooks/checkout-propio` (T02,
+ * dashboard-admin). Misma forma que `reportarAlPanel` del cron (mismo manejo
+ * de timeout, mismo tratamiento de 401 como no-reintentable, mismo
+ * `AbortController`) pero apuntando a una URL/key DISTINTA: `PANEL_VENTAS_URL`
+ * / `PANEL_VENTAS_KEY`, no `PANEL_INGEST_URL`/`KEY` — son dos endpoints
+ * distintos con dos propósitos distintos (D1 del plan: `/api/ingest` no crea
+ * una fila en `orders` con monto, así que no puede ser el mismo destino).
+ *
+ * Vive en `lib/salidas.ts` y no en `app/api/cron/salidas/route.ts` porque el
+ * cron importa esta función tal cual, igual que ya hace con
+ * `armarPayloadIngest` — mantiene el mismo patrón de "las funciones puras y
+ * los efectos de red conviven en este archivo, el cron solo orquesta".
+ */
+export async function reportarVentaAlPanel(datos: FilaCobroParaSalida): Promise<ResultadoPanelVentas> {
+  const armado = armarPayloadVentaPanel(datos);
+  if (!armado.ok) {
+    return { ok: true, reintentar: false, motivo: armado.motivo };
+  }
+
+  const url = process.env.PANEL_VENTAS_URL;
+  const key = process.env.PANEL_VENTAS_KEY;
+  if (!url || !key) {
+    // Mismo principio que P-04 del plan (PANEL_INGEST_URL/KEY): sin URL/key no
+    // hay a quién reportarle, y no es un error transitorio — no tiene sentido
+    // reintentar esto con backoff.
+    return { ok: true, reintentar: false, motivo: 'omitida: PANEL_VENTAS_URL/KEY sin configurar' };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_PANEL_VENTAS_MS);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify(armado.payload),
+      signal: controller.signal,
+    });
+
+    // Mismo motivo que reportarAlPanel: el endpoint puede responder 200 con
+    // {ok:false} para sus propios errores internos (regla 3 de la sección 3
+    // del T05 original, reusada acá) — mirar solo el status HTTP deja pasar
+    // por "enviado" algo que el panel rechazó de verdad.
+    let body: { ok?: boolean; error?: string } = {};
+    try {
+      body = await res.json();
+    } catch {
+      // Respuesta sin JSON parseable: se trata como fallo, más abajo.
+    }
+
+    if (res.status === 401) {
+      // Key mal configurada, no un problema transitorio: no tiene sentido
+      // reintentar esto 50 veces con backoff.
+      return {
+        ok: true,
+        reintentar: false,
+        motivo: `omitida: panel de ventas devolvió 401 (${body.error ?? 'unauthorized'})`,
+      };
+    }
+
+    if (res.ok && body.ok === true) {
+      return { ok: true, reintentar: false };
+    }
+
+    return {
+      ok: false,
+      reintentar: true,
+      motivo: `panel de ventas respondió ${res.status} ok=${body.ok ?? 'sin_body'} error=${body.error ?? ''}`,
+    };
+  } catch (err) {
+    const motivo = err instanceof Error ? err.message : String(err);
+    return { ok: false, reintentar: true, motivo: `fetch al panel de ventas falló: ${motivo}` };
+  } finally {
+    clearTimeout(timeout);
+  }
 }

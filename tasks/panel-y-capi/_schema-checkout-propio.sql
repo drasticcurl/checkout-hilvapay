@@ -1,0 +1,43 @@
+-- Esquema de "panel-y-capi". Repo: dashboard-admin.
+--
+-- ESTE MÓDULO NO AGREGA NINGUNA TABLA NI COLUMNA NUEVA. Verificado por lectura
+-- de las migraciones ya aplicadas (fase 3 del plan). No hay una copia local
+-- de las bases reales de dashboard-admin/checkout-kashhhpay en este entorno
+-- (solo un Postgres 16 de Homebrew vacío) — ver 00-PLAN §10, P-01 — así que
+-- la verificación de que estas tablas existen con estas columnas es por
+-- lectura de las migraciones del repo, no por conexión a la base real:
+--
+--   1. `orders` (004_orders.sql) ya tiene UNIQUE(source, external_id) y las 5
+--      columnas utm_* + fbclid. El endpoint nuevo inserta con
+--      source = 'checkout_propio', igual que Shopify inserta con
+--      source = 'shopify'. No hace falta ALTER.
+--
+--   2. `webhook_events` (007_observabilidad.sql) tiene `source text NOT NULL`
+--      y `shop_domain text` SIN CHECK ni enum. Acepta
+--      source = 'checkout_propio' tal cual, igual que acepta 'shopify' hoy.
+--
+--   3. `product_map` (004_orders.sql) tiene `shop_domain text NOT NULL
+--      DEFAULT '*'` SIN CHECK. Acepta shop_domain = 'checkout_propio' tal
+--      cual. `resolveFunnel()` (lib/orders/resolve.ts) ya hace
+--      `WHERE product_id = $2 AND (shop_domain = $1 OR shop_domain = '*')`,
+--      así que una fila con shop_domain = 'checkout_propio' matchea sin
+--      tocar ese archivo.
+--
+-- Lo único que este módulo necesita en `product_map` son FILAS nuevas (datos,
+-- no schema), una por cada producto de checkout-kashhhpay que tenga que
+-- atribuirse a un funnel. T02 las inserta a mano contra la base real como
+-- parte de su verificación — no puede ser un INSERT ciego en este archivo
+-- porque los IDs de `funnels.id` y los `whop_plan_id` reales no se conocen
+-- hasta ese momento (dependen de qué funnels ya existan en producción).
+--
+-- Plantilla que T02 completa y ejecuta (NO se corre acá; queda documentada
+-- para que T02 la copie):
+--
+--   INSERT INTO product_map (shop_domain, product_id, funnel_id, tier, label)
+--   VALUES ('checkout_propio', '<whop_plan_id o producto_id de checkout-kashhhpay>',
+--           <funnels.id real>, '<front|upsell|bump>', '<label legible>')
+--   ON CONFLICT (shop_domain, product_id) DO NOTHING;
+--
+-- Repo checkout-kashhhpay: tampoco agrega columnas. `ordenes.utms` (jsonb) y
+-- `cobros.whop_payment_id` ya existen (001_init.sql) y son suficientes para
+-- todo lo que T03/T04 necesitan escribir y leer.

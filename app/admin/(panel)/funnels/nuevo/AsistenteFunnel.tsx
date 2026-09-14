@@ -26,14 +26,20 @@ import type { FunnelConPasos } from '../../../../../lib/admin/funnels';
 import { Boton, Campo, EncabezadoPantalla, OpcionRadio, clasesControl } from '../../../../../components/panel/ui';
 import { EditorFunnel } from '../EditorFunnel';
 
-type ProductoSelector = { id: string; nombre: string; precio: string; moneda: string };
+type VarianteSelector = { id: string; nombre: string; etiqueta: string; precio: string; moneda: string };
 
 type Props = {
-  productos: ProductoSelector[];
+  variantes: VarianteSelector[];
 };
 
 function formatearPrecio(precio: string, moneda: string): string {
   return `${moneda.toUpperCase() === 'USD' ? 'US$' : moneda.toUpperCase()} ${Number(precio).toFixed(2).replace('.', ',')}`;
+}
+
+/** "Shot Metabólico (Downsell)", o solo el nombre si la etiqueta es la genérica. */
+function tituloVariante(v: VarianteSelector): string {
+  const esGenerica = v.etiqueta.trim().toLowerCase() === 'precio completo' || v.etiqueta.trim() === '';
+  return esGenerica ? v.nombre : `${v.nombre} (${v.etiqueta})`;
 }
 
 /**
@@ -43,18 +49,18 @@ function formatearPrecio(precio: string, moneda: string): string {
  */
 type EstadoWizard = {
   nombre: string;
-  productoId: string;
+  variantePlanId: string;
   urlGracias: string;
 };
 
 function wizardCompleto(w: EstadoWizard): boolean {
-  return w.nombre.trim().length >= 2 && w.productoId !== '' && w.urlGracias.trim() !== '';
+  return w.nombre.trim().length >= 2 && w.variantePlanId !== '' && w.urlGracias.trim() !== '';
 }
 
-export function AsistenteFunnel({ productos }: Props): JSX.Element {
+export function AsistenteFunnel({ variantes }: Props): JSX.Element {
   const [wizard, setWizard] = useState<EstadoWizard>({
     nombre: 'Nuevo funnel',
-    productoId: '',
+    variantePlanId: '',
     urlGracias: '',
   });
   const [confirmado, setConfirmado] = useState(false);
@@ -62,8 +68,8 @@ export function AsistenteFunnel({ productos }: Props): JSX.Element {
   // Una vez confirmado, se entra al editor con el nombre y la página de
   // gracias ya resueltos. El editor sigue siendo el mismo de siempre — no se
   // le cambia lógica ni prop — así que agregar el paso front ahí es un solo
-  // click más ("Agregar paso" → tipo "Producto principal"), ya con este mismo
-  // producto elegido por default en el selector.
+  // click más ("Agregar paso" → tipo "Producto principal"), ya con esta misma
+  // variante elegida por default en el selector.
   if (confirmado) {
     const funnelInicial: FunnelConPasos = {
       id: '',
@@ -74,10 +80,10 @@ export function AsistenteFunnel({ productos }: Props): JSX.Element {
       updated_at: new Date(),
       pasos: [],
     };
-    return <EditorFunnel funnel={funnelInicial} productos={productos} />;
+    return <EditorFunnel funnel={funnelInicial} variantes={variantes} />;
   }
 
-  const productoElegido = productos.find((p) => p.id === wizard.productoId) ?? null;
+  const varianteElegida = variantes.find((v) => v.id === wizard.variantePlanId) ?? null;
 
   return (
     <div className="max-w-2xl space-y-6">
@@ -98,19 +104,19 @@ export function AsistenteFunnel({ productos }: Props): JSX.Element {
 
         <fieldset>
           <legend className="mb-1.5 text-[13px] font-medium text-tinta">Producto principal</legend>
-          {productos.length === 0 ? (
+          {variantes.length === 0 ? (
             <p className="text-[13px] text-tinta-3">No hay productos vinculados todavía.</p>
           ) : (
             <div className="flex flex-col gap-2">
-              {productos.map((p) => (
+              {variantes.map((v) => (
                 <OpcionRadio
-                  key={p.id}
-                  name="wizard-producto"
-                  value={p.id}
-                  checked={wizard.productoId === p.id}
-                  onChange={() => setWizard((w) => ({ ...w, productoId: p.id }))}
-                  titulo={p.nombre}
-                  descripcion={formatearPrecio(p.precio, p.moneda)}
+                  key={v.id}
+                  name="wizard-variante"
+                  value={v.id}
+                  checked={wizard.variantePlanId === v.id}
+                  onChange={() => setWizard((w) => ({ ...w, variantePlanId: v.id }))}
+                  titulo={tituloVariante(v)}
+                  descripcion={formatearPrecio(v.precio, v.moneda)}
                 />
               ))}
             </div>
@@ -133,10 +139,10 @@ export function AsistenteFunnel({ productos }: Props): JSX.Element {
 
         <div className="flex items-center justify-between gap-4 border-t border-panel-borde pt-4">
           <p className="min-w-0 truncate text-[12px] text-tinta-3">
-            {productoElegido ? (
+            {varianteElegida ? (
               <>
                 <Package size={13} aria-hidden="true" className="mr-1 inline-block align-[-2px]" />
-                {productoElegido.nombre}
+                {tituloVariante(varianteElegida)}
               </>
             ) : (
               'Elegí un producto para continuar.'

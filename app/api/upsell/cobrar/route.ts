@@ -31,6 +31,7 @@ import { resolverSiguienteUrl, resultadoDeEstado } from '@/lib/funnels';
 import { aplicarEstadoDePago, buscarCobro } from '@/lib/cobros';
 import { esFinal, mensajeParaComprador, clasificarDecline } from '@/lib/estado-pago';
 import { crearPagoOffSession, crearCheckoutConfiguration, WhopError } from '@/lib/whop';
+import { utmsParaMetadataWhop } from '@/lib/metadata-whop';
 import type { Cobro, RespuestaCobro } from '@/lib/tipos';
 
 export const runtime = 'nodejs';
@@ -209,7 +210,9 @@ export async function POST(req: Request): Promise<Response> {
     try {
       const config = await crearCheckoutConfiguration({
         planId: pagina.whop_plan_id,
-        metadata: { orden_id: orden.id, pagina_id: pagina.id },
+        // T05 (plan panel-y-capi, D10): redundancia informativa, la fuente
+        // de verdad sigue siendo orden.utms en la base propia.
+        metadata: { orden_id: orden.id, pagina_id: pagina.id, ...utmsParaMetadataWhop(orden.utms) },
       });
       sessionIdRecuperacion = config.id;
     } catch (err) {
@@ -282,12 +285,22 @@ export async function POST(req: Request): Promise<Response> {
       planId: pagina.whop_plan_id,
       memberId: orden.whop_member_id,
       paymentMethodId: orden.whop_payment_method_id,
-      metadata: { orden_id: orden.id, pagina_id: pagina.id },
+      // T05 (plan panel-y-capi, D10): redundancia informativa, la fuente de
+      // verdad sigue siendo orden.utms en la base propia.
+      metadata: { orden_id: orden.id, pagina_id: pagina.id, ...utmsParaMetadataWhop(orden.utms) },
       idempotencyKey,
     });
   } catch (err) {
     return json(
-      await manejarErrorWhop(err, cobro, pagina, orden.whop_member_id, orden.whop_payment_method_id, orden.token),
+      await manejarErrorWhop(
+        err,
+        cobro,
+        pagina,
+        orden.whop_member_id,
+        orden.whop_payment_method_id,
+        orden.token,
+        orden.utms,
+      ),
       200,
     );
   }
@@ -316,6 +329,10 @@ async function manejarErrorWhop(
   // El token de la orden: hace falta para que las respuestas de acá puedan
   // resolver el destino del funnel, igual que las del camino feliz.
   token: string,
+  // T05 (plan panel-y-capi, D10): las UTMs de la orden, para que los reintentos
+  // y la sesión de recuperación de acá también las incluyan en metadata. Único
+  // parámetro nuevo — el resto de la firma no cambia.
+  utms: Record<string, string> | null,
 ): Promise<RespuestaCobro> {
   if (!(err instanceof WhopError)) {
     // Un error que no vino de Whop (un bug nuestro, por ejemplo). No sabemos
@@ -345,7 +362,8 @@ async function manejarErrorWhop(
         planId: pagina.whop_plan_id,
         memberId,
         paymentMethodId,
-        metadata: { orden_id: cobro.orden_id, pagina_id: cobro.pagina_id },
+        // T05 (plan panel-y-capi, D10): redundancia informativa.
+        metadata: { orden_id: cobro.orden_id, pagina_id: cobro.pagina_id, ...utmsParaMetadataWhop(utms) },
         idempotencyKey: cobro.idempotency_key,
       });
       const { status } = await aplicarEstadoDePago(cobro, pago);
@@ -395,7 +413,8 @@ async function manejarErrorWhop(
     try {
       const config = await crearCheckoutConfiguration({
         planId: pagina.whop_plan_id,
-        metadata: { orden_id: cobro.orden_id, pagina_id: cobro.pagina_id },
+        // T05 (plan panel-y-capi, D10): redundancia informativa.
+        metadata: { orden_id: cobro.orden_id, pagina_id: cobro.pagina_id, ...utmsParaMetadataWhop(utms) },
       });
       sessionIdRecuperacion = config.id;
     } catch (e) {

@@ -152,6 +152,25 @@ export type Orden = {
   /** Atribución que llega del funnel. `null` si no vino o no era un UUID. */
   session_id: string | null;
   visitor_id: string | null;
+  /**
+   * `fbclid` NO tiene columna propia — vive ACÁ, dentro de este jsonb, como
+   * una key más (`utms.fbclid`). Decisión de T03 (00-PLAN-PANEL-Y-CAPI.md §1
+   * D6 y T03-utms-checkout-kashhhpay.md §2, Opción A, la recomendada por el
+   * plan): el `BodySchema` de `app/api/checkout/sesion/route.ts` ya declara
+   * `utms: z.record(z.string()).optional()`, sin `.strict()` y sin lista
+   * cerrada de keys, así que acepta `fbclid` sin ningún cambio de código —
+   * verificado con un test antes de asumirlo (`lib/salidas.test.ts`, caso
+   * "el BodySchema real acepta fbclid..."). La Opción B (columna
+   * `ordenes.fbclid` propia) hubiera exigido una migración de schema sin
+   * necesidad: se descarta.
+   *
+   * `lib/salidas.ts` lee `orden.utms?.fbclid` para armar el contrato A
+   * (`armarPayloadVentaPanel`) y lo manda crudo, sin transformar a `fbc`
+   * (D6: esa transformación es responsabilidad de `lib/capi.ts`, no de este
+   * archivo). `extraerUtmsLimpias` (contrato C, hacia `/api/ingest`) en
+   * cambio EXCLUYE `fbclid` de `context.utms`: ese contrato es solo las 5
+   * UTMs de campaña, `fbclid` no es una dimensión de reporte de embudo ahí.
+   */
   utms: Record<string, string> | null;
   created_at: Date;
   updated_at: Date;
