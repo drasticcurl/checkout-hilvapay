@@ -51,6 +51,10 @@ const config: Config = {
         precio: '#1D4ED8',
         borde: '#E5E7EB',
         texto: { DEFAULT: '#111827', suave: '#6B7280' },
+        // El gris detrás de la card del checkout. Antes el body era blanco
+        // liso y la card se fundía con el fondo — sin este color, nada
+        // distingue dónde termina la página y empieza el formulario.
+        fondoPagina: '#F3F4F6',
 
         // ── Panel ──────────────────────────────────────────────────────────
         panel: {

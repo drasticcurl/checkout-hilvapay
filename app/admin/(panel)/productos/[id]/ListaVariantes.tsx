@@ -20,7 +20,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowSquareOut, Star, Warning } from '@phosphor-icons/react/ssr';
-import type { ProductoPlan } from '../../../../../lib/tipos';
+import type { ConfigPagina, ProductoPlan } from '../../../../../lib/tipos';
 import { Aviso, Boton, Campo, Codigo, EstadoVivo, Insignia, Tarjeta, clasesControl } from '@/components/panel/ui';
 import { SwitchActivo } from '../../SwitchActivo';
 
@@ -33,7 +33,7 @@ type PaginaDeVariante = {
   tipo: 'front' | 'upsell';
   url_exito: string | null;
   url_rechazo: string | null;
-  config: Record<string, unknown>;
+  config: ConfigPagina;
 };
 
 export type PlanConPagina = ProductoPlan & { pagina: PaginaDeVariante | null };
@@ -66,6 +66,19 @@ function VarianteCard({ plan }: { plan: PlanConPagina }): JSX.Element {
   const [enviandoSlug, setEnviandoSlug] = useState(false);
   const [errorSlug, setErrorSlug] = useState<string | null>(null);
   const [guardadoSlug, setGuardadoSlug] = useState(false);
+
+  // La barra roja "La oferta expira en …" del checkout (components/checkout/Timer.tsx).
+  // Vacío = sin timer, que es lo que ya interpreta CheckoutContainer cuando
+  // `config.timerMinutos` no está presente. Va como string en el input y se
+  // parsea recién al guardar, igual que el patrón de `delaySegundos` en
+  // FormularioPaso.
+  const timerMinutosInicial = plan.pagina?.config?.timerMinutos;
+  const [timerMinutos, setTimerMinutos] = useState(
+    typeof timerMinutosInicial === 'number' ? String(timerMinutosInicial) : '',
+  );
+  const [enviandoTimer, setEnviandoTimer] = useState(false);
+  const [errorTimer, setErrorTimer] = useState<string | null>(null);
+  const [guardadoTimer, setGuardadoTimer] = useState(false);
 
   const [haciendoDefault, setHaciendoDefault] = useState(false);
 
@@ -138,6 +151,53 @@ function VarianteCard({ plan }: { plan: PlanConPagina }): JSX.Element {
       router.refresh();
     } finally {
       setHaciendoDefault(false);
+    }
+  }
+
+  async function guardarTimer(e: React.FormEvent<HTMLFormElement>): Promise<void> {
+    e.preventDefault();
+    if (!plan.pagina) return;
+    const valor = timerMinutos.trim();
+    if (valor !== '' && (!Number.isFinite(Number(valor)) || Number(valor) <= 0)) {
+      setErrorTimer('Tiene que ser un número de minutos mayor que 0, o vacío para apagarlo.');
+      return;
+    }
+    setEnviandoTimer(true);
+    setErrorTimer(null);
+    setGuardadoTimer(false);
+    try {
+      // Vacío = sin timer: se borra la clave en vez de guardar un 0, para que
+      // CheckoutContainer siga el mismo camino que una página que nunca tuvo
+      // timer (`config.timerMinutos ? <Timer/> : null`).
+      const configNueva: ConfigPagina = { ...plan.pagina.config };
+      if (valor === '') {
+        delete configNueva.timerMinutos;
+      } else {
+        configNueva.timerMinutos = Number(valor);
+      }
+      // Mismo PATCH "reenviar todo" que guardarSlug: el endpoint no acepta
+      // una edición parcial de config sola.
+      const res = await fetch(`/api/admin/paginas/${plan.pagina.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          slug: plan.pagina.slug,
+          producto_id: plan.pagina.producto_id,
+          tipo: plan.pagina.tipo,
+          url_exito: plan.pagina.url_exito,
+          url_rechazo: plan.pagina.url_rechazo,
+          config: configNueva,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setErrorTimer(data.error ?? 'error_desconocido');
+        return;
+      }
+      setGuardadoTimer(true);
+      router.refresh();
+    } finally {
+      setEnviandoTimer(false);
     }
   }
 
@@ -272,6 +332,49 @@ function VarianteCard({ plan }: { plan: PlanConPagina }): JSX.Element {
           </Aviso>
         )}
       </div>
+
+      {plan.pagina ? (
+        <div className="border-t border-panel-borde pt-4">
+          <form onSubmit={guardarTimer} className="space-y-2.5">
+            <Campo
+              etiqueta="Barra de urgencia"
+              htmlFor={`plan-timer-${plan.id}`}
+              className="max-w-[14rem]"
+              opcional
+              ayuda={
+                timerMinutos.trim()
+                  ? `Se muestra arriba del checkout: "La oferta expira en ${timerMinutos} min". No bloquea la compra cuando llega a cero.`
+                  : 'Vacío = sin barra de urgencia en este checkout.'
+              }
+            >
+              <input
+                id={`plan-timer-${plan.id}`}
+                type="number"
+                inputMode="numeric"
+                min={1}
+                step={1}
+                value={timerMinutos}
+                onChange={(e) => setTimerMinutos(e.target.value)}
+                placeholder="Sin timer"
+                className={clasesControl('font-mono tabular-nums')}
+              />
+            </Campo>
+            <div className="flex items-center gap-3">
+              <Boton type="submit" variante="secundario" tamano="sm" disabled={enviandoTimer}>
+                {enviandoTimer ? 'Guardando…' : 'Guardar timer'}
+              </Boton>
+              {guardadoTimer && !enviandoTimer ? (
+                <span className="text-[12px] font-medium text-vivo-oscuro">Guardado.</span>
+              ) : null}
+              {errorTimer ? (
+                <span role="alert" className="text-[12px] font-medium text-peligro">
+                  No se pudo guardar ({errorTimer}).
+                </span>
+              ) : null}
+            </div>
+          </form>
+        </div>
+      ) : null}
     </Tarjeta>
   );
 }

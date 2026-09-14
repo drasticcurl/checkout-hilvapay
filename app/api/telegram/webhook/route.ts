@@ -71,6 +71,23 @@ const AYUDA =
   '<b>/estado</b> — cómo viene todo ahora\n\n' +
   'El código lo da el dueño del negocio.';
 
+/**
+ * El saludo de `/start` muestra el chat_id ya resuelto, para que quien lo
+ * necesite (por ejemplo, para pegarlo en `TELEGRAM_CHAT_ID_ADMIN`) no tenga que
+ * mandar un segundo comando. `/help` y `/ayuda` se quedan con el texto genérico
+ * de comandos, sin repetir el id en cada llamada.
+ */
+function bienvenida(chat: string): string {
+  return (
+    'Hola! Soy el bot de avisos de <b>hilvapay</b>.\n\n' +
+    `Tu chat id para poner es: <code>${escaparHtml(chat)}</code>\n\n` +
+    '<b>/alta &lt;código&gt;</b> — empezar a recibir los avisos\n' +
+    '<b>/baja</b> — dejar de recibirlos\n' +
+    '<b>/estado</b> — cómo viene todo ahora\n\n' +
+    'El código lo da el dueño del negocio.'
+  );
+}
+
 export async function POST(req: Request): Promise<Response> {
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET?.trim();
 
@@ -112,6 +129,8 @@ export async function POST(req: Request): Promise<Response> {
 
   switch (comando) {
     case '/start':
+      return responder(chat, bienvenida(chat));
+
     case '/help':
     case '/ayuda':
       return responder(chat, AYUDA);
