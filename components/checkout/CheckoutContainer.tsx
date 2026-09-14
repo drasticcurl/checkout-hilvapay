@@ -85,6 +85,19 @@ export function CheckoutContainer({
     setMensajeError(null);
     try {
       const params = new URLSearchParams(window.location.search);
+      // UTMs + fbclid: llegan por query desde el funnel (T03, plan
+      // panel-y-capi §4) porque la cookie cross-dominio no puede cruzar de
+      // ritual.hilvanapp.ORG a pay.hilvanapp.COM (son TLDs distintos). Se
+      // juntan en un solo objeto `utms` porque ese es el nombre de campo que
+      // espera el BodySchema de este endpoint y lo que la orden guarda en
+      // `ordenes.utms` (jsonb) — fbclid vive ahí adentro como una key más
+      // (Opción A, ver el comentario de Orden.utms en lib/tipos.ts).
+      const utmKeys = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'fbclid'];
+      const utms: Record<string, string> = {};
+      for (const key of utmKeys) {
+        const value = params.get(key);
+        if (value) utms[key] = value;
+      }
       const res = await fetch('/api/checkout/sesion', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -97,6 +110,7 @@ export function CheckoutContainer({
                 email,
                 sessionId: params.get('sessionId') ?? undefined,
                 visitorId: params.get('visitorId') ?? undefined,
+                utms: Object.keys(utms).length > 0 ? utms : undefined,
               },
         ),
       });
