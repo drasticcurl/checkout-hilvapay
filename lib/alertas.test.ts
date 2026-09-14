@@ -73,9 +73,16 @@ describe('evaluar', () => {
     expect(evaluar(sanos(), AHORA)).toEqual([]);
   });
 
-  it('avisa cuando el webhook funcionó y se calló', () => {
+  it('avisa cuando el webhook funcionó y se calló, con tráfico nuevo sin evento', () => {
+    // El caso real: hubo ventas antes (eventosTotales > 0) y también hay
+    // cobros NUEVOS en la ventana que el webhook no acompañó. Sin
+    // `cobrosEnLaVentana`, esto no es una caída — es que no hay tráfico.
     const alertas = evaluar(
-      sanos({ eventosTotales: 12, ultimoEventoAt: hace(UMBRALES.webhookMudoHoras + 1) }),
+      sanos({
+        eventosTotales: 12,
+        ultimoEventoAt: hace(UMBRALES.webhookMudoHoras + 1),
+        cobrosEnLaVentana: 2,
+      }),
       AHORA,
     );
     expect(alertas).toHaveLength(1);
@@ -84,17 +91,28 @@ describe('evaluar', () => {
     expect(alertas[0].detalle).toContain('72 h');
   });
 
-  it('no avisa si el último webhook está dentro de la ventana', () => {
-    expect(claves(sanos({ eventosTotales: 12, ultimoEventoAt: hace(1) }))).toEqual([]);
+  it('NO avisa si el webhook está callado pero no hay tráfico nuevo — no vender no es una falla', () => {
+    // Regresión del bug medido en producción el 2026-09-14: un negocio sin
+    // ventas en un par de horas (lo normal fuera de campaña) recibía "el
+    // webhook no está llegando" cada 10 minutos. El webhook funcionó alguna
+    // vez (eventosTotales > 0) pero no hay ningún cobro nuevo que debiera
+    // haber traído un evento — no hay nada que esté fallando en silencio.
+    expect(
+      claves(sanos({ eventosTotales: 12, ultimoEventoAt: hace(UMBRALES.webhookMudoHoras + 2), cobrosEnLaVentana: 0 })),
+    ).toEqual([]);
   });
 
-  it('justo en el umbral ya avisa', () => {
-    // El límite es `>=`: a las 6 h exactas se avisa. Si fuera `>`, un cron que
+  it('no avisa si el último webhook está dentro de la ventana', () => {
+    expect(claves(sanos({ eventosTotales: 12, ultimoEventoAt: hace(1), cobrosEnLaVentana: 2 }))).toEqual([]);
+  });
+
+  it('justo en el umbral ya avisa, con tráfico nuevo', () => {
+    // El límite es `>=`: a las 2 h exactas se avisa. Si fuera `>`, un cron que
     // corre cada 15 min dejaría pasar la ventana sin avisar cuando el evento
     // cae justo en el borde.
-    expect(claves(sanos({ eventosTotales: 1, ultimoEventoAt: hace(UMBRALES.webhookMudoHoras) }))).toEqual([
-      'webhook_mudo',
-    ]);
+    expect(
+      claves(sanos({ eventosTotales: 1, ultimoEventoAt: hace(UMBRALES.webhookMudoHoras), cobrosEnLaVentana: 1 })),
+    ).toEqual(['webhook_mudo']);
   });
 
   it('avisa si hubo cobros y nunca llegó ningún webhook', () => {
@@ -219,6 +237,7 @@ describe('audiencia', () => {
       eventosConError: 1,
       eventosTotales: 5,
       ultimoEventoAt: hace(9),
+      cobrosEnLaVentana: 2,
       disputas: [novedad({ cobroId: 'd1' })],
       reembolsos: [novedad({ cobroId: 'r1' })],
     });
@@ -231,7 +250,7 @@ describe('audiencia', () => {
     expect(audienciaDe(sanos({ colaAtrasada: 1 }), 'cola_atascada')).toBe('admin');
     expect(audienciaDe(sanos({ cobrosTrabados: 1 }), 'cobros_trabados')).toBe('admin');
     expect(audienciaDe(sanos({ eventosConError: 1 }), 'eventos_con_error')).toBe('admin');
-    expect(audienciaDe(sanos({ eventosTotales: 3, ultimoEventoAt: hace(9) }), 'webhook_mudo')).toBe('admin');
+    expect(audienciaDe(sanos({ eventosTotales: 3, ultimoEventoAt: hace(9), cobrosEnLaVentana: 1 }), 'webhook_mudo')).toBe('admin');
   });
 
   it('los reembolsos y disputas también son del admin: se resuelven en Whop', () => {

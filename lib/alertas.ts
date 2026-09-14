@@ -279,16 +279,28 @@ export function evaluar(s: Sintomas, ahora: Date = new Date()): Alerta[] {
 
   // ── El webhook dejó de llegar ──────────────────────────────────────────────
   //
-  // Las dos condiciones importan. Sin la segunda, un deploy nuevo (0 eventos, 0
-  // cobros, webhook todavía sin configurar) alertaría cada 12 horas para siempre
-  // por algo que no es una falla: es un sistema que todavía no arrancó. Y sin la
-  // primera, una tarde sin ventas parecería una caída.
+  // La señal es TRÁFICO SIN EVENTO, no el mero paso del tiempo: sin exigir
+  // `cobrosEnLaVentana > 0`, una tarde sin ventas (lo normal fuera de una
+  // campaña activa) se leería como una caída, y esta es la única alerta que
+  // insiste cada 10 minutos — el ruido más caro del bot si se dispara mal.
   //
-  // Traducido: se alerta si el webhook FUNCIONÓ alguna vez y se calló, o si hubo
-  // cobros en la ventana y ningún webhook los acompañó.
+  // Traducido: se alerta si HUBO TRÁFICO en la ventana (cobros nuevos) y el
+  // webhook no lo acompañó — sea porque ya venía funcionando y se calló, o
+  // porque nunca llegó ninguno.
+  //
+  // Antes esta alerta solo exigía "pasaron 2+ h desde el último evento
+  // histórico", sin mirar si hubo algo nuevo que el webhook debiera haber
+  // avisado. Eso confunde "el webhook está caído" con "no hay ventas": un
+  // negocio que vendió una vez y no vuelve a vender en dos horas (lo normal
+  // fuera de una campaña activa) recibía "el webhook no está llegando" cada 10
+  // minutos para siempre, aunque no hubiera nada roto. Medido en producción el
+  // 2026-09-14.
   const horasSinEvento = s.ultimoEventoAt ? horasDesde(s.ultimoEventoAt, ahora) : null;
   const funcionóYSeCalló =
-    s.eventosTotales > 0 && horasSinEvento !== null && horasSinEvento >= UMBRALES.webhookMudoHoras;
+    s.eventosTotales > 0 &&
+    s.cobrosEnLaVentana > 0 &&
+    horasSinEvento !== null &&
+    horasSinEvento >= UMBRALES.webhookMudoHoras;
   const huboCobrosSinWebhook = s.eventosTotales === 0 && s.cobrosEnLaVentana > 0;
 
   if (funcionóYSeCalló || huboCobrosSinWebhook) {
