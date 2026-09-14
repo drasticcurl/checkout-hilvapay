@@ -304,15 +304,27 @@ export function CheckoutContainer({
               />
             ) : !esRecuperacion || metodo === 'tarjeta' ? (
               // El esqueleto que se ve mientras faltan datos: MISMA caja que va a
-              // tener el embed —mismo borde de 2px, mismo padding, mismo radio— para
-              // que al montarse no salte el layout.
-              <div className="whop-checkout-wrapper rounded-lg border-2 border-precio px-3.5 py-3">
-                <div className="flex h-32 items-center justify-center">
-                  <span
-                    className="h-6 w-6 animate-spin rounded-full border-2 border-borde border-t-precio"
-                    role="status"
-                    aria-label="Completá tus datos para continuar"
-                  />
+              // tener el embed —mismo borde de 2px, mismo padding, mismo radio—
+              // para que al montarse no salte el layout.
+              //
+              // Antes esto era un spinner girando sin parar hasta que el
+              // comprador completaba nombre y email — nada carga en ese
+              // momento (la sesión ni se pide hasta que los datos están
+              // completos, ver `listoParaMostrarEmbed`), así que un spinner
+              // infinito se lee como la página rota, no como "esperando tu
+              // input". La referencia (KashPay) no anima nada acá: dibuja la
+              // FORMA del formulario de tarjeta con placeholders estáticos, que
+              // es lo que de verdad va a aparecer.
+              <div className="whop-checkout-wrapper rounded-lg border-2 border-precio px-3.5 py-3" aria-hidden="true">
+                <div className="flex items-center gap-2 pb-3">
+                  <span className="h-4 w-4 shrink-0 rounded-full border-2 border-precio" />
+                  <span className="h-[15px] w-4 rounded-sm bg-borde" />
+                  <span className="h-3.5 w-28 rounded-sm bg-borde" />
+                </div>
+                <div className="h-11 w-full rounded-md bg-borde/60" />
+                <div className="mt-2.5 flex gap-2.5">
+                  <div className="h-11 flex-1 rounded-md bg-borde/60" />
+                  <div className="h-11 flex-1 rounded-md bg-borde/60" />
                 </div>
               </div>
             ) : null}
