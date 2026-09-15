@@ -777,3 +777,93 @@ cambio al archivo.
    guardada" — es una decisión de producto, no un bloqueo técnico. El botón de wallet sigue
    necesitándose como fallback en dos casos (pago con wallet en el front, o método no guardable en
    absoluto), así que no se elimina en ningún escenario.
+
+
+---
+
+## 2026-09-15 — Downsell por fondos insuficientes, y el panel completo a dark mode
+
+Commit: `4dae436`. Release en producción: `20260915145702`.
+
+### De dónde salió
+
+Dos pedidos separados que terminaron en la misma sesión. El primero: qué pasa hoy cuando un upsell
+rebota con `insufficient_funds`. La respuesta, verificada leyendo el código y no asumida: el cobro
+queda `fallido` y punto — es una decisión de diseño explícita (`lib/estado-pago.ts` ya tenía el test
+"poner la misma tarjeta de nuevo no crea fondos"), no un bug. Lo que faltaba era el camino de
+recuperación: mandar a un downsell si el operador configuró uno para ese motivo puntual.
+
+La primera propuesta reusaba `paso_rechazado_id` (el downsell del botón "No, gracias"), condicionado
+al toggle `permite_rechazo`. Se descartó por una objeción válida del dueño: fondos insuficientes no
+es un click del comprador, es Whop devolviendo un decline — exigir el toggle hubiera obligado a
+prender un botón de rechazo visible solo para habilitar este otro camino, mezclando dos conceptos
+distintos.
+
+El segundo pedido, sobre la marcha: pasar todo el panel a dark mode y rehacer visualmente el editor
+de funnels (con una captura de referencia de otro producto, de la que se tomó el estilo, no las
+secciones que no existen en este proyecto — script/botón/IA de esa captura son de otra herramienta).
+
+### La migración 014 y por qué es una columna propia, no una rama de la que ya existía
+
+`downsell_por_fondos_id` en `paginas`, independiente de `paso_rechazado_id` y de `permite_rechazo`.
+La función pura nueva (`resolverDestinoPorFondos` en `lib/funnels.ts`) tiene una diferencia de
+comportamiento respecto de `resolverDestino` que no es un detalle: **nunca cae a la página de
+gracias** cuando no hay destino configurado. El resolutor de rechazo sí cae a gracias porque el
+comprador ya pagó ESE paso; acá el comprador no compró el downsell, así que "gracias" sería un
+mensaje falso — el silencio es lo correcto.
+
+Se aplicó también al endpoint de polling (`/api/cobros/[id]`), que tenía la misma lógica duplicada del
+endpoint de cobro. Sin ese segundo cambio, el camino que de verdad se ejecuta cuando el webhook
+resuelve el estado después de que el POST inicial devolvió `procesando` hubiera seguido usando el
+camino viejo — un bug que solo se manifiesta en producción real, con el timing real de Whop, nunca en
+un test con mocks sincrónicos.
+
+### El panel a dark: el hallazgo que hubiera roto el checkout sin nadie notarlo
+
+Al reescribir la paleta de colores del panel en `tailwind.config.ts`, apareció un problema real, no
+teórico: `boxShadow.panel`/`panel-md`/`panel-lg` **no está scopeado por paleta** — es una utilidad de
+Tailwind compartida, y `components/checkout/CheckoutContainer.tsx` (la card del checkout, que sigue
+claro) usa `shadow-panel-md`. Oscurecer esos tres nombres le hubiera roto la sombra al checkout
+(negro marcado sobre fondo blanco) sin que nadie lo hubiera pedido — exactamente la clase de cambio
+que el comentario de cabecera de ese archivo advertía no hacer sin poder medir cuál de dos cambios
+simultáneos movió un número.
+
+Se corrigió antes de que llegara a producción: `shadow-panel*` se dejó intacto (sirve al checkout) y
+se creó un set nuevo con otro nombre (`shadow-sombra*`) para el panel dark. Se encontró revisando
+cada valor de `tailwind.config.ts` que no vive dentro del namespace `colors.panel/tinta/acento/...`
+contra los usos reales en `components/checkout/**` — la lección que queda: cualquier utilidad plana
+(sombras, animaciones, radios) puede filtrarse entre las dos paletas si comparte nombre, aunque los
+colores estén bien separados.
+
+### Otro patrón sistemático, encontrado revisando contraste real y no a ojo
+
+El sistema claro usaba `text-*-oscuro` (el tono más saturado de cada acento) como color de texto
+sobre fondo blanco — funcionaba porque el fondo era claro. Invertida la paleta, ese mismo tono
+**falla WCAG AA como texto** sobre los nuevos fondos oscuros (2.9–3.8:1, medido con un script de
+contraste real, no estimado), mientras que el tono `DEFAULT` (pensado para brillar sobre oscuro) da
+5.8–8.8:1 en el mismo lugar. Se corrigió en 22 archivos, con los dos puntos de mayor impacto en
+`TONOS_INSIGNIA` y `TONOS_AVISO` de `components/panel/ui.tsx` — arreglan en cascada todas las
+`<Insignia>` y `<Aviso>` del panel sin tocarlas una por una.
+
+### Verificado antes y después del deploy
+
+Local: `tsc --noEmit` limpio, 535/535 tests, `next build` exitoso, y 12 capturas reales con
+Playwright/Chromium contra el servidor de dev confirmando el panel en dark y — la comprobación que
+importaba de verdad — `/pagos/agua-de-arroz` (el checkout real, con un producto de prueba) seguía
+100% claro, sin ninguna clase de la paleta del panel filtrada.
+
+En producción, después del deploy: los diez códigos HTTP de `COMO-DEPLOYAR.md` §4 coincidieron
+exactamente, incluido el **404** en `pay.hilvanapp.com/admin` (separación de dominios intacta) y el
+**400** en el POST sin firma al webhook (el WAF sigue dejando pasar el endpoint real, no lo bloquea
+Cloudflare). Los tres crons siguieron en `ok` después del reload, sin ninguna falla nueva. Una
+captura real de `https://hilvapay.hilvanapp.com/admin/login` confirmó el dark mode sirviendo en
+producción, no solo en la build local.
+
+### Lo que queda pendiente, explícitamente
+
+1. **El operador tiene que configurar la rama "Sin fondos suficientes" en cada upsell** para que el
+   downsell por fondos haga algo — sin configurar, el comportamiento es idéntico al de antes de esta
+   sesión (el cobro queda `fallido`, sin ningún mensaje visible para el comprador).
+2. **No se armó un backup previo a la migración 014** en producción — es aditiva (una columna
+   nullable) y de bajo riesgo, pero sigue sin existir un `pg_dump` programado de la base `hilvapay`
+   (ver §6 de `COMO-DEPLOYAR.md`, ya señalado antes de esta sesión).

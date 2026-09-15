@@ -1,10 +1,9 @@
 # ESTADO — checkout propio sobre Whop (hilvapay)
 
-Última actualización: **2026-09-13** (el cobro off-session del upsell se destrabó: la causa era la
-checkout configuration del front, no algo del lado de Whop. Verificado con cobros reales en
-producción. Vive en la rama `feature/checkout-sin-configuration`, pendiente de merge a `main`.
-También: demora configurable del botón del upsell, y el botón elige wallet o cobro silencioso según
-con qué se pagó el front).
+Última actualización: **2026-09-15** (el panel completo pasó a dark mode y el editor de funnels se
+rediseñó visualmente — el checkout, `/pagos/<slug>`, sigue claro sin cambios. Además: downsell
+configurable cuando un upsell rebota por fondos insuficientes, independiente del botón de rechazo.
+Deployado a `main`, commit `4dae436`, release `20260915145702`).
 
 Este archivo es la foto del proyecto: qué es, qué está hecho, qué falta y qué hay que saber para no
 romperlo. Si algo de acá no coincide con la realidad, la realidad tiene razón: corregí el archivo.
@@ -232,6 +231,36 @@ protege el cobro contra un doble cobro de verdad sigue siendo el índice único 
 El paso `front` no tenía selector para su rama "si acepta": el comprador se quedaba en el checkout
 después de pagar en vez de seguir al primer upsell. Ya arreglado; el detalle y la advertencia para
 funnels viejos están en §5.
+
+---
+
+## 2.quater Dark mode y downsell por fondos insuficientes (nuevo, 2026-09-15)
+
+**El panel completo (`/admin/*`) pasó a dark mode.** El checkout (`/pagos/<slug>`) no se tocó, sigue
+claro — las dos paletas ya estaban separadas por diseño (`tailwind.config.ts`) y se mantuvieron así.
+El editor de funnels se rediseñó visualmente: imagen de producto también en las tarjetas de upsell
+(antes solo el paso `front` la mostraba), un badge distinto cuando un paso es el downsell de otro
+(rol que se calcula recorriendo el grafo, no un campo propio de la fila), y el riel de conexión entre
+pasos se pinta de un color solo cuando coincide con la flecha real guardada — nunca sugiere una
+conexión que no existe en los datos.
+
+**Nuevo: qué pasa cuando un upsell rebota por `insufficient_funds`.** Antes, nada — el cobro quedaba
+`fallido` y ahí terminaba, sin ningún camino de recuperación (era una decisión de diseño explícita:
+reintentar con la misma tarjeta sin fondos no soluciona nada). Ahora, si el paso tiene un downsell
+configurado para ese motivo puntual (columna `downsell_por_fondos_id`, migración 014), el comprador
+va a esa página. Es independiente del toggle "Activar botón de rechazo": fondos insuficientes no es
+un click del comprador, es un decline de Whop, así que no depende de que el operador quiera mostrar
+un botón de "No, gracias" visible.
+
+| Qué | Qué resuelve |
+|---|---|
+| `downsell_por_fondos_id` en `paginas` (migración 014) | el destino cuando el decline es `insufficient_funds`, ajeno a `paso_rechazado_id` |
+| Tercera rama en el editor ("Sin fondos suficientes") | visible siempre en un paso `upsell`, sin depender de `permite_rechazo` |
+| Imagen de producto en tarjetas de upsell | antes solo la tenía el paso `front` |
+| `shadow-sombra*` (nuevo, en `tailwind.config.ts`) | sombras propias del panel dark, separadas de `shadow-panel*` que sigue usando el checkout |
+
+El operador tiene que entrar al editor y configurar esa rama en cada upsell para que haga algo: sin
+configurar, el comportamiento es el mismo que había antes de esta sesión.
 
 ---
 
