@@ -5,10 +5,12 @@
 @layer base {
   :root {
     /*
-     * El panel y el checkout son claros y se quedan claros. No es pereza: es un
-     * modo verificado en vez de dos a medias. Sin esto, algunos navegadores
-     * fuerzan los controles nativos (select, checkbox, radio) a oscuro y quedan
-     * ilegibles sobre fondo blanco.
+     * El CHECKOUT es claro y se queda claro. No es pereza: es un modo
+     * verificado en vez de dos a medias, y sigue siendo la parte que ve el
+     * comprador — sin este valor, algunos navegadores fuerzan los controles
+     * nativos (select, checkbox, radio) a oscuro y quedan ilegibles sobre fondo
+     * blanco. Este es el default para TODO el documento; el panel lo pisa en
+     * su propio árbol (ver `app/admin/layout.tsx`) sin tocar este valor global.
      */
     color-scheme: light;
   }
@@ -23,8 +25,9 @@
   }
 
   /*
-   * Un solo anillo de foco para toda la app, con `:focus-visible` y no `:focus`:
-   * aparece navegando con teclado y no en cada click del mouse. Es requisito de
+   * Un solo anillo de foco para el CHECKOUT (el panel tiene el suyo, más abajo,
+   * scopeado a su árbol), con `:focus-visible` y no `:focus`: aparece
+   * navegando con teclado y no en cada click del mouse. Es requisito de
    * accesibilidad, no decoración.
    *
    * Los campos de texto y los `select` quedan afuera a propósito: siempre matchean
@@ -51,15 +54,47 @@
     background-color: #dbeafe;
     color: #18181b;
   }
+
+  /*
+   * Panel a dark (sesión 2026-09-15): mismo criterio que arriba, pero con el
+   * azul más brillante de la paleta dark (`acento` = #60A5FA) — el cobalto
+   * `#2563eb` de arriba da 3.3-3.8:1 contra los fondos oscuros del panel, al
+   * límite del mínimo de foco (3:1) y sin margen. Este da 6.7-7.8:1.
+   * `[data-panel-dark]` lo pone el div contenedor de `app/admin/layout.tsx`;
+   * scopear con un atributo y no con una clase de Tailwind evita que esto
+   * dependa de si esa clase sobrevive un purge del build.
+   */
+  [data-panel-dark] :where(
+      a,
+      button,
+      summary,
+      [role='switch'],
+      [tabindex],
+      input[type='checkbox'],
+      input[type='radio'],
+      input[type='file']
+    ):focus-visible {
+    outline: 2px solid #60a5fa;
+    outline-offset: 2px;
+  }
+
+  [data-panel-dark] ::selection {
+    background-color: #213a64;
+    color: #f4f4f5;
+  }
 }
 
 @layer utilities {
   /*
    * El riel del editor de funnel: una grilla de 1px muy tenue que dice "esto es
    * un lienzo de flujo" sin dibujar líneas decorativas alrededor del contenido.
+   * Ajustado a dark (sesión 2026-09-15): el punto pasó de un gris claro
+   * (#e4e4e7) a un gris muy oscuro (#232328) apenas más claro que
+   * `panel.fondo` — sigue siendo textura, no una grilla que compita con las
+   * tarjetas.
    */
   .lienzo-flujo {
-    background-image: radial-gradient(circle at 1px 1px, #e4e4e7 1px, transparent 0);
+    background-image: radial-gradient(circle at 1px 1px, #232328 1px, transparent 0);
     background-size: 16px 16px;
   }
 }

@@ -76,7 +76,7 @@ export default async function CatalogoPage(): Promise<JSX.Element> {
       {productos.map((prod) => (
         <section
           key={prod.whop_product_id}
-          className="overflow-hidden rounded-card border border-panel-borde bg-panel-sup shadow-panel"
+          className="overflow-hidden rounded-card border border-panel-borde bg-panel-sup shadow-sombra"
         >
           <header className="flex flex-wrap items-center justify-between gap-3 border-b border-panel-borde bg-panel-sup2/60 px-4 py-3">
             <div className="min-w-0 space-y-1">
@@ -88,7 +88,7 @@ export default async function CatalogoPage(): Promise<JSX.Element> {
                 href={`https://whop.com/${prod.route}/`}
                 target="_blank"
                 rel="noreferrer noopener"
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-micro text-[12px] font-medium text-acento transition-colors hover:text-acento-oscuro hover:underline"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-micro text-[12px] font-medium text-acento transition-colors hover:underline"
               >
                 Ver en Whop
                 <ArrowSquareOut size={12} aria-hidden="true" />
@@ -116,7 +116,7 @@ export default async function CatalogoPage(): Promise<JSX.Element> {
       ))}
 
       {huerfanos.length > 0 ? (
-        <section className="overflow-hidden rounded-card border border-alerta-borde bg-panel-sup shadow-panel">
+        <section className="overflow-hidden rounded-card border border-alerta-borde bg-panel-sup shadow-sombra">
           <header className="space-y-1 border-b border-alerta-borde bg-alerta-suave px-4 py-3">
             <h2 className="text-sm font-semibold text-alerta">Planes sin producto</h2>
             <p className="max-w-[70ch] text-[12px] leading-relaxed text-alerta">

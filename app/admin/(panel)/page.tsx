@@ -92,10 +92,10 @@ function TarjetaAcceso({ href, titulo, descripcion, Icono }: Acceso): JSX.Elemen
       href={href}
       className={unir(
         'group flex items-start gap-3.5 rounded-card border border-panel-borde bg-panel-sup px-5 py-4',
-        'shadow-panel transition-colors hover:border-panel-bordeFuerte hover:bg-panel-sup2',
+        'shadow-sombra transition-colors hover:border-panel-bordeFuerte hover:bg-panel-sup2',
       )}
     >
-      <div className="mt-0.5 shrink-0 rounded-ctrl bg-acento-suave p-2 text-acento-oscuro">
+      <div className="mt-0.5 shrink-0 rounded-ctrl bg-acento-suave p-2 text-acento">
         <Icono size={18} weight="regular" aria-hidden="true" />
       </div>
       <div className="min-w-0 flex-1 space-y-1">

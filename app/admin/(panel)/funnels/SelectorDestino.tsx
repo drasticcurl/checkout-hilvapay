@@ -12,6 +12,14 @@ type Props = {
   valorActual: number | null;
   onElegir: (destino: number | null) => void;
   onCancelar: () => void;
+  /**
+   * El texto de la opción "sin destino" (`null`). Default: la página de
+   * gracias, que es lo que significa `null` para las ramas aceptado/rechazado.
+   * El camino de fondos insuficientes (migración 014) nunca cae a gracias —
+   * `null` ahí es "no configurado, no pasa nada" — así que ese caller manda un
+   * texto distinto para no sugerir un comportamiento que no existe.
+   */
+  etiquetaSinDestino?: string;
 };
 
 /**
@@ -41,7 +49,7 @@ function Opcion({
         'flex w-full items-center gap-2 rounded-ctrl border px-3 py-2 text-left text-[13px]',
         'transition-[border-color,background-color] duration-150',
         elegida
-          ? 'border-acento bg-acento-suave font-medium text-acento-oscuro'
+          ? 'border-acento bg-acento-suave font-medium text-acento'
           : 'border-panel-bordeFuerte bg-panel-sup text-tinta hover:border-tinta-4 hover:bg-panel-sup2',
       )}
     >
@@ -52,7 +60,14 @@ function Opcion({
   );
 }
 
-export function SelectorDestino({ pasos, indiceOrigen, valorActual, onElegir, onCancelar }: Props): JSX.Element {
+export function SelectorDestino({
+  pasos,
+  indiceOrigen,
+  valorActual,
+  onElegir,
+  onCancelar,
+  etiquetaSinDestino = 'Terminar en la página de gracias',
+}: Props): JSX.Element {
   return (
     <Dialogo
       titulo="¿A dónde va?"
@@ -71,7 +86,7 @@ export function SelectorDestino({ pasos, indiceOrigen, valorActual, onElegir, on
           onClick={() => onElegir(null)}
           icono={<FlagCheckered size={14} aria-hidden="true" />}
         >
-          Terminar en la página de gracias
+          {etiquetaSinDestino}
         </Opcion>
         {pasos.map((p, i) =>
           i === indiceOrigen ? null : (

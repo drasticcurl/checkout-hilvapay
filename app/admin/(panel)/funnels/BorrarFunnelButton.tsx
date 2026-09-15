@@ -69,7 +69,7 @@ export function BorrarFunnelButton({ id, nombre }: { id: string; nombre: string 
         >
           <div className="flex gap-3 rounded-ctrl border border-peligro-borde bg-peligro-suave px-3.5 py-3">
             <Warning size={17} className="mt-px shrink-0 text-peligro" aria-hidden="true" />
-            <p className="text-[13px] leading-relaxed text-peligro-oscuro">
+            <p className="text-[13px] leading-relaxed text-peligro">
               Se pierden el agrupamiento y las flechas configuradas. No se puede deshacer.
             </p>
           </div>

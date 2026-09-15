@@ -40,6 +40,13 @@ export type PasoDeFunnel = {
   permite_rechazo: boolean;
   paso_aceptado_id: string | null;
   paso_rechazado_id: string | null;
+  /**
+   * A dónde mandar cuando el upsell rebota por fondos insuficientes. Migración
+   * 014: independiente de `permite_rechazo`/`paso_rechazado_id` — ver el
+   * comentario largo en `lib/funnels.ts`, `resolverDestinoPorFondos`. Solo
+   * tiene sentido en un paso `upsell`; en el `front` siempre es `null`.
+   */
+  downsell_por_fondos_id: string | null;
   activo: boolean;
   producto: {
     id: string;
@@ -94,6 +101,7 @@ type FilaPaso = {
   permite_rechazo: boolean;
   paso_aceptado_id: string | null;
   paso_rechazado_id: string | null;
+  downsell_por_fondos_id: string | null;
   activo: boolean;
   config: { delaySegundos?: number } | null;
   /** El id de `producto_planes` resuelto — nunca null en una fila nueva; puede serlo en una legacy sin migrar. */
@@ -121,7 +129,8 @@ type FilaPaso = {
  */
 const SELECT_PASOS = `
   select pg.id, pg.funnel_id, pg.slug, pg.producto_id, pg.producto_plan_id, pg.tipo, pg.orden, pg.nombre,
-         pg.url_externa, pg.permite_rechazo, pg.paso_aceptado_id, pg.paso_rechazado_id, pg.activo,
+         pg.url_externa, pg.permite_rechazo, pg.paso_aceptado_id, pg.paso_rechazado_id,
+         pg.downsell_por_fondos_id, pg.activo,
          pg.config,
          coalesce(pp.id, pr_directo_legacy.id) as plan_id,
          coalesce(pp.producto_id, pr_directo.id) as prod_id,
@@ -150,6 +159,7 @@ function filaAPaso(f: FilaPaso): PasoDeFunnel {
     permite_rechazo: f.permite_rechazo,
     paso_aceptado_id: f.paso_aceptado_id,
     paso_rechazado_id: f.paso_rechazado_id,
+    downsell_por_fondos_id: f.downsell_por_fondos_id,
     activo: f.activo,
     // El jsonb puede venir null (páginas creadas antes de tener esta
     // columna) o sin la clave (config: {} de siempre). Los dos casos caen en
@@ -261,6 +271,14 @@ export type EntradaPaso = {
    */
   paso_aceptado_indice: number | null;
   paso_rechazado_indice: number | null;
+  /**
+   * A dónde mandar si el upsell rebota por fondos insuficientes. Mismo criterio
+   * de índice que las dos anteriores, pero es un destino aparte (migración
+   * 014): `null` acá significa "no configurado", no "página de gracias" — sin
+   * fondos nunca cae a gracias, porque el comprador no compró. Solo tiene
+   * sentido en un paso `upsell`.
+   */
+  downsell_por_fondos_indice: number | null;
   /** Ver `PasoDeFunnel.delay_segundos`. `null` = sin demora. */
   delay_segundos: number | null;
 };
@@ -346,12 +364,12 @@ export async function guardarFunnel(id: string | null, datos: EntradaFunnel): Pr
         const idsQueQuedan = datos.pasos.map((p) => p.id).filter((x): x is string => Boolean(x));
         if (idsQueQuedan.length > 0) {
           await c.query(
-            'update paginas set funnel_id = null, paso_aceptado_id = null, paso_rechazado_id = null where funnel_id = $1 and id <> all($2::uuid[])',
+            'update paginas set funnel_id = null, paso_aceptado_id = null, paso_rechazado_id = null, downsell_por_fondos_id = null where funnel_id = $1 and id <> all($2::uuid[])',
             [funnelId, idsQueQuedan],
           );
         } else {
           await c.query(
-            'update paginas set funnel_id = null, paso_aceptado_id = null, paso_rechazado_id = null where funnel_id = $1',
+            'update paginas set funnel_id = null, paso_aceptado_id = null, paso_rechazado_id = null, downsell_por_fondos_id = null where funnel_id = $1',
             [funnelId],
           );
         }
@@ -491,20 +509,29 @@ export async function guardarFunnel(id: string | null, datos: EntradaFunnel): Pr
           p.paso_rechazado_indice != null && p.paso_rechazado_indice >= 0
             ? idsPorIndice[p.paso_rechazado_indice] ?? null
             : null;
+        // Mismo criterio de resolución por índice que las dos de arriba
+        // (migración 014). No participa de `detectarCiclo`: el downsell por
+        // fondos no es una rama del flujo aceptado/rechazado, es un destino
+        // aparte que solo se sigue si el cobro rebota por ese motivo puntual —
+        // no puede formar el ciclo que ese resolutor busca (comprador que
+        // nunca llega a gracias).
+        const downsellPorFondosId =
+          p.downsell_por_fondos_indice != null && p.downsell_por_fondos_indice >= 0
+            ? idsPorIndice[p.downsell_por_fondos_indice] ?? null
+            : null;
 
         // Un paso no puede apuntarse a sí mismo (constraint de la migración
-        // 003): se detecta acá, antes del UPDATE, para dar un mensaje que
-        // nombra el paso en vez de dejar que el CHECK de postgres tire un error
-        // críptico con el nombre de la constraint.
-        if (aceptadoId === id_ || rechazadoId === id_) {
+        // 003, extendida en la 014): se detecta acá, antes del UPDATE, para dar
+        // un mensaje que nombra el paso en vez de dejar que el CHECK de
+        // postgres tire un error críptico con el nombre de la constraint.
+        if (aceptadoId === id_ || rechazadoId === id_ || downsellPorFondosId === id_) {
           return { ok: false, error: 'ciclo', detalle: `el paso "${p.nombre ?? p.slug}" se apunta a sí mismo` };
         }
 
-        await c.query('update paginas set paso_aceptado_id = $1, paso_rechazado_id = $2 where id = $3', [
-          aceptadoId,
-          rechazadoId,
-          id_,
-        ]);
+        await c.query(
+          'update paginas set paso_aceptado_id = $1, paso_rechazado_id = $2, downsell_por_fondos_id = $3 where id = $4',
+          [aceptadoId, rechazadoId, downsellPorFondosId, id_],
+        );
         pasosParaCiclo.push({ id: id_, paso_aceptado_id: aceptadoId, paso_rechazado_id: rechazadoId });
       }
 

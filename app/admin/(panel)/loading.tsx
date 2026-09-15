@@ -22,7 +22,7 @@ export default function CargandoPanel(): JSX.Element {
         <Esqueleto className="h-9 w-28 rounded-ctrl" />
       </div>
 
-      <div className="overflow-hidden rounded-card border border-panel-borde bg-panel-sup shadow-panel">
+      <div className="overflow-hidden rounded-card border border-panel-borde bg-panel-sup shadow-sombra">
         <div className="flex gap-4 border-b border-panel-borde bg-panel-sup2/60 px-4 py-3">
           <Esqueleto className="h-3 w-28" />
           <Esqueleto className="h-3 w-20" />

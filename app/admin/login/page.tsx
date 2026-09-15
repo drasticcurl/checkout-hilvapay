@@ -44,7 +44,7 @@ export default function LoginPage(): JSX.Element {
         <div className="flex flex-col items-center gap-3 text-center">
           <span
             aria-hidden="true"
-            className="flex h-10 w-10 items-center justify-center rounded-ctrl bg-tinta text-lg font-semibold leading-none text-white shadow-panel-md"
+            className="flex h-10 w-10 items-center justify-center rounded-ctrl bg-panel-solida text-lg font-semibold leading-none text-panel-fondo shadow-sombra-md"
           >
             h
           </span>
@@ -58,7 +58,7 @@ export default function LoginPage(): JSX.Element {
 
         <form
           onSubmit={onSubmit}
-          className="mt-6 space-y-4 rounded-card border border-panel-borde bg-panel-sup p-5 shadow-panel-md"
+          className="mt-6 space-y-4 rounded-card border border-panel-borde bg-panel-sup p-5 shadow-sombra-md"
         >
           <Campo etiqueta="Contraseña" htmlFor="password">
             <input
@@ -81,7 +81,7 @@ export default function LoginPage(): JSX.Element {
           {error ? (
             <p
               role="alert"
-              className="flex items-center gap-2 rounded-ctrl border border-peligro-borde bg-peligro-suave px-3 py-2 text-[13px] font-medium text-peligro-oscuro"
+              className="flex items-center gap-2 rounded-ctrl border border-peligro-borde bg-peligro-suave px-3 py-2 text-[13px] font-medium text-peligro"
             >
               <Warning size={15} className="shrink-0" aria-hidden="true" />
               Contraseña incorrecta.

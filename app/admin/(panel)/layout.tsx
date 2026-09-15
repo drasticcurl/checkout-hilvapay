@@ -30,10 +30,12 @@ export default function PanelLayout({ children }: { children: ReactNode }): JSX.
             aria-label="Inicio del panel"
           >
             {/* Marca: cuadrado con la inicial en Geist. Un monograma tipográfico,
-                no un SVG decorativo dibujado a mano. */}
+                no un SVG decorativo dibujado a mano. `panel-solida` (casi blanco,
+                invertido) reemplaza el `bg-tinta` de la era clara: en dark,
+                `tinta` es la escala de TEXTO y ya no sirve como fondo sólido. */}
             <span
               aria-hidden="true"
-              className="flex h-7 w-7 items-center justify-center rounded-ctrl bg-tinta text-[15px] font-semibold leading-none text-white"
+              className="flex h-7 w-7 items-center justify-center rounded-ctrl bg-panel-solida text-[15px] font-semibold leading-none text-panel-fondo"
             >
               h
             </span>

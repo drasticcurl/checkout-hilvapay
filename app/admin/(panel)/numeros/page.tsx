@@ -117,7 +117,7 @@ export default async function NumerosPage({
                 className={unir(
                   'rounded-ctrl px-2.5 py-1.5 text-[13px] font-medium transition-colors duration-150',
                   k === clave
-                    ? 'bg-acento-suave text-acento-oscuro'
+                    ? 'bg-acento-suave text-acento'
                     : 'text-tinta-2 hover:bg-panel-sup2 hover:text-tinta',
                 )}
               >
@@ -239,7 +239,7 @@ export default async function NumerosPage({
                   {declines.map((d) => (
                     <Tr key={d.decline_code}>
                       <Td>
-                        <span className="font-mono text-[12px] text-peligro-oscuro">{d.decline_code}</span>
+                        <span className="font-mono text-[12px] text-peligro">{d.decline_code}</span>
                       </Td>
                       <Td numerica>{d.veces}</Td>
                     </Tr>

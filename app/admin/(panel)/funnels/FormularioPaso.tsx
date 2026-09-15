@@ -35,6 +35,12 @@ export type PasoEditor = {
   producto: { id: string; nombre: string; etiqueta: string; precio: string; moneda: string; imagen_url: string | null };
   paso_aceptado_indice: number | null;
   paso_rechazado_indice: number | null;
+  /**
+   * A dónde mandar si este upsell rebota por fondos insuficientes (migración
+   * 014). Mismo criterio de índice que las dos anteriores, pero es un destino
+   * aparte: no depende de `permite_rechazo`. Solo aplica a un paso `upsell`.
+   */
+  downsell_por_fondos_indice: number | null;
   /** Ver `PasoDeFunnel.delay_segundos` en `lib/admin/funnels.ts`. `null` = sin demora. */
   delay_segundos: number | null;
 };
@@ -159,6 +165,7 @@ export function FormularioPaso({ paso, variantes, permitirFront, onGuardar, onCa
         : paso?.producto ?? { id: '', nombre: '', etiqueta: '', precio: '', moneda: 'usd', imagen_url: null },
       paso_aceptado_indice: paso?.paso_aceptado_indice ?? null,
       paso_rechazado_indice: paso?.paso_rechazado_indice ?? null,
+      downsell_por_fondos_indice: paso?.downsell_por_fondos_indice ?? null,
       delay_segundos: delayParseado != null && delayParseado > 0 ? delayParseado : null,
     });
   }

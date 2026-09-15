@@ -68,7 +68,7 @@ function BloqueCodigo({ codigo, etiqueta }: { codigo: string; etiqueta: string }
           'absolute right-2 top-2 inline-flex h-7 items-center gap-1.5 rounded-micro border px-2',
           'text-[12px] font-medium transition-[background-color,border-color,color] duration-150',
           copiado
-            ? 'border-vivo-borde bg-vivo-suave text-vivo-oscuro'
+            ? 'border-vivo-borde bg-vivo-suave text-vivo'
             : 'border-panel-bordeFuerte bg-panel-sup text-tinta-2 hover:border-tinta-4 hover:text-tinta',
         )}
       >
@@ -156,7 +156,7 @@ export function ComoIntegrar({
               className={unir(
                 'rounded-[6px] px-2.5 py-1 text-[12px] font-medium transition-[background-color,color] duration-150',
                 lenguaje === valor
-                  ? 'bg-panel-sup text-tinta shadow-panel'
+                  ? 'bg-panel-sup text-tinta shadow-sombra'
                   : 'text-tinta-3 hover:text-tinta',
               )}
             >
@@ -226,7 +226,7 @@ export function ComoIntegrar({
               {faltantes.length > 0 ? (
                 <a
                   href="/admin/origenes"
-                  className="inline-flex items-center gap-1.5 text-[13px] font-medium text-acento hover:text-acento-oscuro"
+                  className="inline-flex items-center gap-1.5 text-[13px] font-medium text-acento hover:underline"
                 >
                   Ir a orígenes autorizados
                   <ArrowSquareOut size={13} aria-hidden="true" />

@@ -62,7 +62,7 @@ export function SwitchDestinatario({
       />
       <span
         className={
-          valor ? 'text-[12px] font-medium text-vivo-oscuro' : 'text-[12px] font-medium text-tinta-3'
+          valor ? 'text-[12px] font-medium text-vivo' : 'text-[12px] font-medium text-tinta-3'
         }
       >
         {valor ? etiquetas[0] : etiquetas[1]}

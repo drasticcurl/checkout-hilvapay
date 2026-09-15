@@ -182,7 +182,7 @@ export default async function AlertasPage(): Promise<JSX.Element> {
                   />
                 </Td>
                 <Td className="whitespace-nowrap text-tinta-2">{fechaCorta(d.ultimo_ok_at) ?? <SinDato />}</Td>
-                <Td className="max-w-[18rem] truncate text-[12px] text-peligro-oscuro">
+                <Td className="max-w-[18rem] truncate text-[12px] text-peligro">
                   {d.ultimo_error ?? <SinDato />}
                 </Td>
                 <Td className="text-right">

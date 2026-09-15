@@ -8,6 +8,7 @@ import {
   CaretRight,
   Copy,
   Check,
+  CreditCard,
   FlagCheckered,
   PencilSimple,
   Plus,
@@ -56,6 +57,8 @@ function pasosAEditor(funnel: FunnelConPasos | null): PasoEditor[] {
     producto: p.producto,
     paso_aceptado_indice: p.paso_aceptado_id != null ? indicePorId.get(p.paso_aceptado_id) ?? null : null,
     paso_rechazado_indice: p.paso_rechazado_id != null ? indicePorId.get(p.paso_rechazado_id) ?? null : null,
+    downsell_por_fondos_indice:
+      p.downsell_por_fondos_id != null ? indicePorId.get(p.downsell_por_fondos_id) ?? null : null,
     delay_segundos: p.delay_segundos,
   }));
 }
@@ -83,9 +86,10 @@ export function EditorFunnel({ funnel, variantes }: Props): JSX.Element {
   const [pasos, setPasos] = useState<PasoEditor[]>(pasosAEditor(funnel));
   const [editandoIndice, setEditandoIndice] = useState<number | 'nuevo' | null>(null);
   const [editandoGracias, setEditandoGracias] = useState(false);
-  const [ramaAbierta, setRamaAbierta] = useState<{ indice: number; rama: 'aceptado' | 'rechazado' } | null>(
-    null,
-  );
+  const [ramaAbierta, setRamaAbierta] = useState<{
+    indice: number;
+    rama: 'aceptado' | 'rechazado' | 'sin_fondos';
+  } | null>(null);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -100,13 +104,21 @@ export function EditorFunnel({ funnel, variantes }: Props): JSX.Element {
     setEditandoIndice(null);
   }
 
-  function elegirDestino(indice: number, rama: 'aceptado' | 'rechazado', destino: number | null): void {
+  function elegirDestino(
+    indice: number,
+    rama: 'aceptado' | 'rechazado' | 'sin_fondos',
+    destino: number | null,
+  ): void {
     setPasos((prev) =>
       prev.map((p, i) =>
         i === indice
           ? {
               ...p,
-              ...(rama === 'aceptado' ? { paso_aceptado_indice: destino } : { paso_rechazado_indice: destino }),
+              ...(rama === 'aceptado'
+                ? { paso_aceptado_indice: destino }
+                : rama === 'rechazado'
+                  ? { paso_rechazado_indice: destino }
+                  : { downsell_por_fondos_indice: destino }),
             }
           : p,
       ),
@@ -134,6 +146,7 @@ export function EditorFunnel({ funnel, variantes }: Props): JSX.Element {
           permite_rechazo: p.permite_rechazo,
           paso_aceptado_indice: p.paso_aceptado_indice,
           paso_rechazado_indice: p.paso_rechazado_indice,
+          downsell_por_fondos_indice: p.downsell_por_fondos_indice,
         })),
       };
       const res = await fetch(funnel ? `/api/admin/funnels/${funnel.id}` : '/api/admin/funnels', {
@@ -190,35 +203,65 @@ export function EditorFunnel({ funnel, variantes }: Props): JSX.Element {
         </Aviso>
       ) : null}
 
-      {/* El lienzo punteado marca dónde termina el formulario y empieza el flujo.
-          Es la única textura del panel y sirve para eso, no para decorar. */}
-      <Tarjeta className="lienzo-flujo p-5">
+      {/* El lienzo: fondo con más carácter que una tarjeta blanca lisa (grid de
+          puntos + viñeta radial sutil hacia los bordes, sesión 2026-09-15) —
+          es el único lugar del panel donde el fondo importa tanto como el
+          contenido, porque ACÁ es donde se lee el flujo completo de un
+          vistazo. */}
+      <Tarjeta className="lienzo-flujo relative overflow-hidden p-5">
+        {/* Viñeta: oscurece los bordes del lienzo un poco más que el centro,
+            para que las tarjetas (más claras) se sientan "sobre" una
+            superficie con profundidad y no pegadas a un fondo plano. Puramente
+            decorativo — `aria-hidden` y sin contenido. */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_0%,rgba(0,0,0,0.35)_100%)]"
+        />
         {pasos.length === 0 ? (
-          <p className="py-6 text-center text-[13px] text-tinta-2">
+          <p className="relative py-6 text-center text-[13px] text-tinta-2">
             El funnel está vacío. Empezá por el producto principal: es la oferta que abre la cadena.
           </p>
         ) : (
-          <ol className="space-y-0">
+          <ol className="relative space-y-0">
             {pasos.map((paso, indice) => {
               const esFront = paso.tipo === 'front';
+              // Un paso es "downsell de algo" si ALGÚN otro paso lo señala como
+              // su destino de rechazo o de fondos insuficientes — el rol lo da
+              // el grafo, no un campo propio del paso (no existe tal campo:
+              // "downsell" no es un tipo en el esquema, ver migración 003/014).
+              const esDownsellDeAlgo = pasos.some(
+                (p) => p.paso_rechazado_indice === indice || p.downsell_por_fondos_indice === indice,
+              );
+              // El riel visual conecta la posición N con la N+1 SIEMPRE (es el
+              // layout, no el grafo). Se pinta verde solo cuando esa conexión
+              // visual COINCIDE con la rama "aceptado" real de este paso — así
+              // el color nunca miente sobre una flecha que no existe: si el
+              // aceptado de este paso apunta a otro lado, el riel se queda
+              // neutro en vez de sugerir una conexión falsa.
+              const siguienteEsAceptado = paso.paso_aceptado_indice === indice + 1;
               return (
-                <li key={indice} className="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-x-3">
+                <li key={indice} className="grid grid-cols-[2rem_minmax(0,1fr)] gap-x-3">
                   {/* Riel: el nodo y la línea que baja al siguiente paso. La línea
                       es `flex-1` para que mida exactamente lo que mide la fila. */}
                   <div className="flex flex-col items-center">
                     <span
                       className={unir(
-                        'flex h-7 w-7 shrink-0 items-center justify-center rounded-full',
-                        'font-mono text-[12px] font-medium tabular-nums',
+                        'flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
+                        'font-mono text-[12px] font-medium tabular-nums ring-2 ring-panel-fondo',
                         esFront
-                          ? 'bg-tinta text-white'
-                          : 'border border-panel-bordeFuerte bg-panel-sup text-tinta-2',
+                          ? 'bg-panel-solida text-panel-fondo'
+                          : 'border border-panel-bordeFuerte bg-panel-sup2 text-tinta-2',
                       )}
                       aria-hidden="true"
                     >
                       {indice + 1}
                     </span>
-                    <span className="mt-1 w-px flex-1 bg-panel-bordeFuerte" />
+                    <span
+                      className={unir(
+                        'mt-1 w-[2px] flex-1 rounded-full transition-colors duration-150',
+                        siguienteEsAceptado ? 'bg-vivo/70' : 'bg-panel-bordeFuerte',
+                      )}
+                    />
                   </div>
 
                   <div className="min-w-0 pb-5">
@@ -228,6 +271,7 @@ export function EditorFunnel({ funnel, variantes }: Props): JSX.Element {
                       <TarjetaUpsell
                         paso={paso}
                         indice={indice}
+                        esDownsellDeAlgo={esDownsellDeAlgo}
                         onEditar={() => setEditandoIndice(indice)}
                       />
                     )}
@@ -271,7 +315,7 @@ export function EditorFunnel({ funnel, variantes }: Props): JSX.Element {
 
         {/* Cierre del riel: el mismo carril, con el botón de agregar y el destino
             final del funnel. */}
-        <div className="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-x-3">
+        <div className="relative grid grid-cols-[2rem_minmax(0,1fr)] gap-x-3">
           <div className="flex justify-center">
             <button
               type="button"
@@ -300,7 +344,7 @@ export function EditorFunnel({ funnel, variantes }: Props): JSX.Element {
               onClick={() => setEditandoGracias(true)}
               className={unir(
                 'inline-flex items-center gap-1.5 rounded-ctrl border border-panel-bordeFuerte bg-panel-sup',
-                'px-2.5 py-1.5 text-[13px] text-tinta-2 shadow-panel transition-colors duration-150',
+                'px-2.5 py-1.5 text-[13px] text-tinta-2 shadow-sombra transition-colors duration-150',
                 'hover:border-tinta-4 hover:bg-panel-sup2 hover:text-tinta',
               )}
             >
@@ -346,8 +390,15 @@ export function EditorFunnel({ funnel, variantes }: Props): JSX.Element {
           valorActual={
             ramaAbierta.rama === 'aceptado'
               ? pasos[ramaAbierta.indice].paso_aceptado_indice
-              : pasos[ramaAbierta.indice].paso_rechazado_indice
+              : ramaAbierta.rama === 'rechazado'
+                ? pasos[ramaAbierta.indice].paso_rechazado_indice
+                : pasos[ramaAbierta.indice].downsell_por_fondos_indice
           }
+          // El destino `null` significa cosas distintas según la rama: en
+          // aceptado/rechazado es "página de gracias" (el funnel se termina
+          // ahí); en fondos insuficientes es "no configurado, no pasa nada" —
+          // nunca cae a gracias, porque el comprador no compró (migración 014).
+          etiquetaSinDestino={ramaAbierta.rama === 'sin_fondos' ? 'No configurado' : undefined}
           onElegir={(destino) => elegirDestino(ramaAbierta.indice, ramaAbierta.rama, destino)}
           onCancelar={() => setRamaAbierta(null)}
         />
@@ -375,10 +426,18 @@ function traducirError(codigo: string | undefined): string {
   }
 }
 
-/** Clases compartidas por las dos tarjetas de paso, para que hover y foco sean iguales. */
+/**
+ * Clases compartidas por las dos tarjetas de paso, para que hover y foco sean
+ * iguales. Más profundidad que el resto del panel (sesión 2026-09-15,
+ * rediseño del editor): el lienzo del funnel es la única pantalla donde las
+ * tarjetas SON el contenido — el resto del panel son listas y formularios. Por
+ * eso llevan `shadow-sombra-md` de reposo (no solo en hover) y un borde con
+ * más contraste que `panel.borde`.
+ */
 const TARJETA_PASO =
-  'group relative block w-full rounded-card border border-panel-borde bg-panel-sup p-3.5 text-left ' +
-  'shadow-panel transition-[border-color,box-shadow] duration-150 hover:border-acento hover:shadow-panel-md';
+  'group relative block w-full rounded-card border border-panel-bordeFuerte bg-panel-sup p-4 text-left ' +
+  'shadow-sombra-md transition-[border-color,box-shadow,transform] duration-150 ' +
+  'hover:border-acento hover:shadow-sombra-lg hover:-translate-y-0.5';
 
 /** El lápiz aparece en hover: dice que la tarjeta entera abre el formulario. */
 function Lapiz(): JSX.Element {
@@ -387,6 +446,30 @@ function Lapiz(): JSX.Element {
       size={14}
       aria-hidden="true"
       className="absolute right-3.5 top-3.5 text-tinta-4 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+    />
+  );
+}
+
+/** El cuadro de imagen del producto, o un marcador neutro si no tiene. Mismo tamaño en las dos tarjetas. */
+function ImagenProducto({ url, alto = 12 }: { url: string | null; alto?: 10 | 12 }): JSX.Element {
+  const tamano = alto === 12 ? 'h-12 w-12' : 'h-10 w-10';
+  if (!url) {
+    return (
+      <div
+        aria-hidden="true"
+        className={unir(
+          tamano,
+          'shrink-0 rounded-ctrl border border-panel-bordeFuerte bg-panel-sup2',
+        )}
+      />
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element -- viene de una URL externa arbitraria, no del build
+    <img
+      src={url}
+      alt=""
+      className={unir(tamano, 'shrink-0 rounded-ctrl border border-panel-bordeFuerte object-cover')}
     />
   );
 }
@@ -401,22 +484,15 @@ function TarjetaProductoPrincipal({
   return (
     <button type="button" onClick={onEditar} className={TARJETA_PASO}>
       <Lapiz />
-      <div className="flex items-center gap-3">
-        {paso.producto.imagen_url ? (
-          // eslint-disable-next-line @next/next/no-img-element -- viene de una URL externa arbitraria, no del build
-          <img
-            src={paso.producto.imagen_url}
-            alt=""
-            className="h-10 w-10 shrink-0 rounded-ctrl border border-panel-borde object-cover"
-          />
-        ) : null}
+      <div className="flex items-center gap-3.5">
+        <ImagenProducto url={paso.producto.imagen_url} />
         <div className="min-w-0 flex-1">
           <Insignia tono="acento">Producto principal</Insignia>
-          <p className="mt-1.5 truncate text-sm font-semibold text-tinta">
+          <p className="mt-1.5 truncate text-[15px] font-semibold text-tinta">
             {paso.producto.nombre || 'Sin producto elegido'}
           </p>
         </div>
-        <span className="shrink-0 font-mono text-[13px] tabular-nums text-tinta-2">
+        <span className="shrink-0 font-mono text-sm tabular-nums text-tinta-2">
           {paso.producto.precio ? formatearPrecio(paso.producto.precio, paso.producto.moneda) : <SinDato />}
         </span>
       </div>
@@ -424,34 +500,44 @@ function TarjetaProductoPrincipal({
   );
 }
 
+/**
+ * Un tono propio para distinguir "es un downsell de otro paso" de "es un
+ * upsell más de la cadena" — sin esto, la etiqueta "Upsell N" no dice nada
+ * sobre el ROL del paso en el grafo, que es justo lo que la captura de
+ * referencia (sesión 2026-09-15) resuelve con un badge de otro color.
+ * `esDownsellDeAlgo` se calcula en `EditorFunnel` recorriendo `paso_rechazado_indice`
+ * y `downsell_por_fondos_indice` de TODOS los pasos — este componente no
+ * conoce el grafo completo, solo recibe el resultado.
+ */
 function TarjetaUpsell({
   paso,
   indice,
+  esDownsellDeAlgo,
   onEditar,
 }: {
   paso: PasoEditor;
   indice: number;
+  esDownsellDeAlgo: boolean;
   onEditar: () => void;
 }): JSX.Element {
   return (
     <button type="button" onClick={onEditar} className={TARJETA_PASO}>
       <Lapiz />
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3.5">
+        <ImagenProducto url={paso.producto.imagen_url} />
         <div className="min-w-0 flex-1">
-          {/* `max-w-full truncate`: un nombre de paso largo ("Upsell para
-              compradores que llegan desde la campaña de reactivación de
-              carrito") desbordaba la tarjeta en vez de cortarse — `Insignia`
-              es `inline-flex` sin tope de ancho por diseño (la usan celdas de
-              tabla angostas donde el texto siempre es corto), así que el tope
-              se pone acá, en el único lugar donde el texto lo puede rebasar. */}
-          <Insignia tono="neutro" className="max-w-full truncate">
-            {paso.nombre || `Upsell ${indice}`}
+          {/* `max-w-full truncate`: un nombre de paso largo desbordaba la
+              tarjeta en vez de cortarse — `Insignia` es `inline-flex` sin tope
+              de ancho por diseño (la usan celdas de tabla angostas donde el
+              texto siempre es corto), así que el tope se pone acá. */}
+          <Insignia tono={esDownsellDeAlgo ? 'acento' : 'vivo'} className="max-w-full truncate">
+            {esDownsellDeAlgo ? 'Downsell' : paso.nombre || `Upsell ${indice}`}
           </Insignia>
-          <p className="mt-1.5 truncate text-sm font-semibold text-tinta">
+          <p className="mt-1.5 truncate text-[15px] font-semibold text-tinta">
             {paso.producto.nombre || 'Sin producto elegido'}
           </p>
         </div>
-        <span className="shrink-0 font-mono text-[13px] tabular-nums text-tinta-2">
+        <span className="shrink-0 font-mono text-sm tabular-nums text-tinta-2">
           {paso.producto.precio ? formatearPrecio(paso.producto.precio, paso.producto.moneda) : <SinDato />}
         </span>
       </div>
@@ -459,36 +545,47 @@ function TarjetaUpsell({
   );
 }
 
-/** Una rama: qué pasó, y a dónde va. El destino se cambia tocándola. */
+/**
+ * Una rama: qué pasó, y a dónde va. El destino se cambia tocándola.
+ *
+ * Rediseño de la sesión 2026-09-15: antes solo tenía color en `:hover` (texto
+ * plano en reposo) — se pasó a un fondo de color siempre visible (`bg-*-suave`
+ * + borde), como una "pill" de conexión, para que la rama se lea sin pasar el
+ * mouse. Es lo que hace que el flujo se distinga de un formulario de lista.
+ */
 function Rama({
   tono,
   que,
   destino,
+  icono,
   onClick,
 }: {
-  tono: 'vivo' | 'peligro';
+  tono: 'vivo' | 'peligro' | 'neutro';
   que: string;
   destino: string;
+  /** Reemplaza la flecha default. Usado por la rama de fondos insuficientes, que no es "aceptó/rechazó". */
+  icono?: React.ReactNode;
   onClick: () => void;
 }): JSX.Element {
   const tonos = {
-    vivo: 'text-vivo-oscuro hover:bg-vivo-suave',
-    peligro: 'text-peligro-oscuro hover:bg-peligro-suave',
+    vivo: 'border-vivo-borde bg-vivo-suave text-vivo hover:bg-vivo-borde/40',
+    peligro: 'border-peligro-borde bg-peligro-suave text-peligro hover:bg-peligro-borde/40',
+    neutro: 'border-panel-bordeFuerte bg-panel-sup2 text-tinta-2 hover:bg-panel-sup3',
   };
   return (
     <button
       type="button"
       onClick={onClick}
       className={unir(
-        'inline-flex max-w-full items-center gap-1.5 rounded-ctrl px-1.5 py-1 text-[12px]',
+        'inline-flex max-w-full items-center gap-1.5 rounded-full border px-2 py-1 text-[12px]',
         'transition-colors duration-150',
         tonos[tono],
       )}
     >
-      <ArrowElbowDownRight size={13} aria-hidden="true" className="shrink-0" />
+      {icono ?? <ArrowElbowDownRight size={13} aria-hidden="true" className="shrink-0" />}
       <span className="font-medium">{que}</span>
-      <CaretRight size={10} aria-hidden="true" className="shrink-0 opacity-50" />
-      <span className="min-w-0 truncate text-tinta-2">{destino}</span>
+      <CaretRight size={10} aria-hidden="true" className="shrink-0 opacity-60" />
+      <span className="min-w-0 truncate opacity-80">{destino}</span>
     </button>
   );
 }
@@ -504,7 +601,7 @@ function RamasDelPaso({
   pasos: PasoEditor[];
   /** El front no tiene rama de rechazo: o paga o no hay compra que registrar. */
   esFront: boolean;
-  onAbrirRama: (rama: 'aceptado' | 'rechazado') => void;
+  onAbrirRama: (rama: 'aceptado' | 'rechazado' | 'sin_fondos') => void;
   onAgregarDownsell: () => void;
 }): JSX.Element {
   function etiquetaDestino(indice: number | null): string {
@@ -563,6 +660,21 @@ function RamasDelPaso({
             {vaAGracias ? 'Crear el paso al que va esta rama' : 'Crear otro downsell'}
           </button>
         </div>
+      ) : null}
+      {/* Migración 014: independiente de `permite_rechazo` a propósito — fondos
+          insuficientes no es un click del comprador que active un botón visible,
+          es Whop devolviendo un decline. Por eso vive SIEMPRE que el paso sea un
+          upsell, nunca condicionada al toggle de arriba. Tono "neutro" (no
+          vivo/peligro) porque no es "el comprador decidió algo": es un fallo
+          técnico del pago con un camino de recuperación aparte. */}
+      {!esFront ? (
+        <Rama
+          tono="neutro"
+          que="Sin fondos suficientes"
+          destino={paso.downsell_por_fondos_indice == null ? 'no configurado' : etiquetaDestino(paso.downsell_por_fondos_indice)}
+          icono={<CreditCard size={13} aria-hidden="true" className="shrink-0" />}
+          onClick={() => onAbrirRama('sin_fondos')}
+        />
       ) : null}
     </div>
   );
@@ -728,7 +840,7 @@ function SnippetDelPaso({
               aria-pressed={lenguaje === valor}
               className={unir(
                 'rounded-[5px] px-2 py-0.5 text-[11px] font-medium transition-colors duration-150',
-                lenguaje === valor ? 'bg-panel-sup text-tinta shadow-panel' : 'text-tinta-3 hover:text-tinta',
+                lenguaje === valor ? 'bg-panel-sup text-tinta shadow-sombra' : 'text-tinta-3 hover:text-tinta',
               )}
             >
               {etiqueta}
@@ -743,7 +855,7 @@ function SnippetDelPaso({
             'inline-flex h-6 shrink-0 items-center gap-1 rounded-micro border px-2 text-[11px] font-medium',
             'transition-[background-color,border-color,color] duration-150',
             copiado
-              ? 'border-vivo-borde bg-vivo-suave text-vivo-oscuro'
+              ? 'border-vivo-borde bg-vivo-suave text-vivo'
               : 'border-panel-bordeFuerte bg-panel-sup text-tinta-2 hover:border-tinta-4 hover:text-tinta',
           )}
         >

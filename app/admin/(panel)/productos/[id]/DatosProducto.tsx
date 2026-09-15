@@ -118,9 +118,11 @@ export function DatosProducto({ producto }: Props): JSX.Element {
               }}
               className={unir(
                 'block w-full cursor-pointer text-[13px] text-tinta-2',
-                'file:mr-3 file:cursor-pointer file:rounded-ctrl file:border-0 file:bg-tinta',
-                'file:px-3 file:py-1.5 file:text-[13px] file:font-medium file:text-white',
-                'hover:file:bg-black disabled:opacity-50',
+                // `panel-solida` (casi blanco) en vez de `bg-tinta`: en dark,
+                // `tinta` es la escala de texto y ya no sirve como fondo sólido.
+                'file:mr-3 file:cursor-pointer file:rounded-ctrl file:border-0 file:bg-panel-solida',
+                'file:px-3 file:py-1.5 file:text-[13px] file:font-medium file:text-panel-fondo',
+                'hover:file:bg-tinta-2 disabled:opacity-50',
               )}
             />
             {subiendo ? <p className="text-[12px] text-tinta-3">Subiendo…</p> : null}
@@ -164,7 +166,7 @@ export function DatosProducto({ producto }: Props): JSX.Element {
           {enviando ? 'Guardando…' : 'Guardar cambios'}
         </Boton>
         {guardado && !enviando ? (
-          <span className="text-[12px] font-medium text-vivo-oscuro">Guardado.</span>
+          <span className="text-[12px] font-medium text-vivo">Guardado.</span>
         ) : null}
       </div>
     </form>

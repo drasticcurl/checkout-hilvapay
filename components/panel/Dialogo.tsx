@@ -104,7 +104,7 @@ export function Dialogo({
         tabIndex={-1}
         className={unir(
           'relative z-dialog max-h-[calc(100dvh-2rem)] w-full overflow-y-auto rounded-card',
-          'border border-panel-borde bg-panel-sup shadow-panel-lg animate-aparecer-dialogo focus:outline-none',
+          'border border-panel-borde bg-panel-sup shadow-sombra-lg animate-aparecer-dialogo focus:outline-none',
           anchos[ancho],
         )}
       >

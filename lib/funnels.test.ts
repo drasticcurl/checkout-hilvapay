@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   detectarCiclo,
   resolverDestino,
+  resolverDestinoPorFondos,
   resultadoDeEstado,
   type FunnelParaResolver,
   type PasoParaResolver,
@@ -16,6 +17,7 @@ function paso(over: Partial<PasoParaResolver> = {}): PasoParaResolver {
     permite_rechazo: false,
     paso_aceptado_id: null,
     paso_rechazado_id: null,
+    downsell_por_fondos_id: null,
     url_exito: null,
     url_rechazo: null,
     ...over,
@@ -91,6 +93,52 @@ describe('resolverDestino — camino rechazado', () => {
     const d = resolverDestino(
       paso({ permite_rechazo: true, paso_aceptado_id: 'p2', paso_rechazado_id: 'p3' }),
       'rechazado',
+      FUNNEL,
+      URLS,
+    );
+    expect(d).toMatchObject({ pasoId: 'p3' });
+  });
+});
+
+describe('resolverDestinoPorFondos — migración 014, independiente de permite_rechazo', () => {
+  it('con downsell configurado, va ahí — AUNQUE permite_rechazo esté apagado', () => {
+    // Este es el caso que motivó la migración: fondos insuficientes no es un
+    // click del comprador en el botón de rechazo, es Whop devolviendo un
+    // decline. Exigir permite_rechazo obligaría a prender un botón visible que
+    // el operador no quiere mostrar, solo para habilitar este otro camino.
+    const d = resolverDestinoPorFondos(
+      paso({ permite_rechazo: false, downsell_por_fondos_id: 'p3' }),
+      FUNNEL,
+      URLS,
+    );
+    expect(d).toEqual({ tipo: 'paso', pasoId: 'p3', url: 'https://f.com/upsell-2' });
+  });
+
+  it('sin downsell configurado (el caso default), sin destino — nunca cae a gracias', () => {
+    // A diferencia de resolverDestino('rechazado'): mandar a la página de
+    // gracias a alguien que NO compró este downsell sería mentirle. El
+    // silencio (quedarse donde está) es lo correcto, igual que el
+    // comportamiento de antes de esta migración.
+    const d = resolverDestinoPorFondos(paso({ downsell_por_fondos_id: null }), FUNNEL, URLS);
+    expect(d.tipo).toBe('sin_destino');
+  });
+
+  it('sin funnel (página suelta), sin destino — el downsell por fondos es un concepto de funnel', () => {
+    const suelta = paso({ funnel_id: null, downsell_por_fondos_id: 'p3' });
+    expect(resolverDestinoPorFondos(suelta, null, URLS).tipo).toBe('sin_destino');
+  });
+
+  it('el destino configurado pero sin url_externa: sin destino, NO cae a gracias', () => {
+    // Distinto de resolverDestino, que en este caso SÍ cae a gracias (el
+    // comprador ya pagó ese paso). Acá el comprador no compró el downsell, así
+    // que gracias sería un mensaje falso — mejor no ir a ningún lado.
+    const d = resolverDestinoPorFondos(paso({ downsell_por_fondos_id: 'sinUrl' }), FUNNEL, URLS);
+    expect(d.tipo).toBe('sin_destino');
+  });
+
+  it('no usa paso_rechazado_id ni paso_aceptado_id: son caminos totalmente separados', () => {
+    const d = resolverDestinoPorFondos(
+      paso({ paso_aceptado_id: 'p2', paso_rechazado_id: 'p2', downsell_por_fondos_id: 'p3' }),
       FUNNEL,
       URLS,
     );

@@ -72,7 +72,7 @@ function Enlaces({ pathname }: { pathname: string }): JSX.Element {
               'inline-flex shrink-0 items-center gap-1.5 rounded-ctrl px-2.5 py-1.5 text-[13px] font-medium',
               'transition-[background-color,color] duration-150',
               activo
-                ? 'bg-acento-suave text-acento-oscuro'
+                ? 'bg-acento-suave text-acento'
                 : 'text-tinta-2 hover:bg-panel-sup2 hover:text-tinta',
             )}
           >

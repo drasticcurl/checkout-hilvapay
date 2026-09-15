@@ -65,7 +65,7 @@ export function DiagnosticoBot(): JSX.Element {
           type="button"
           onClick={() => void consultar()}
           disabled={cargando}
-          className="text-[12px] font-medium text-acento-oscuro hover:underline disabled:opacity-50"
+          className="text-[12px] font-medium text-acento hover:underline disabled:opacity-50"
         >
           {cargando ? 'Consultando…' : 'Volver a chequear'}
         </button>
@@ -105,7 +105,7 @@ function FilaBot({ bot }: { bot: EstadoBot }): JSX.Element {
         icono={<XCircle size={16} className="text-peligro" aria-hidden="true" />}
         texto={
           <>
-            El token no es válido: <span className="text-peligro-oscuro">{bot.error}</span>. Puede que se
+            El token no es válido: <span className="text-peligro">{bot.error}</span>. Puede que se
             haya revocado desde @BotFather, o que se pegó mal en el entorno.
           </>
         }
@@ -185,7 +185,7 @@ function FilaWebhook({ webhook }: { webhook: EstadoWebhook }): JSX.Element {
               {webhook.pendientes} update(s) pendientes de entregar
               {webhook.ultimoError ? (
                 <>
-                  . Último error: <span className="text-peligro-oscuro">{webhook.ultimoError}</span>
+                  . Último error: <span className="text-peligro">{webhook.ultimoError}</span>
                 </>
               ) : null}
             </>

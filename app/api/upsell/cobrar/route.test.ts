@@ -30,6 +30,7 @@ const headersCorsMock = vi.fn();
 const resolverTokenMock = vi.fn();
 const crearPagoOffSessionMock = vi.fn();
 const resolverSiguienteUrlMock = vi.fn().mockResolvedValue(null);
+const resolverSiguienteUrlPorFondosMock = vi.fn().mockResolvedValue(null);
 
 vi.mock('@/lib/db', () => ({
   q: (...args: unknown[]) => qMock(...args),
@@ -58,6 +59,7 @@ vi.mock('@/lib/whop', () => ({
 
 vi.mock('@/lib/funnels', () => ({
   resolverSiguienteUrl: (...args: unknown[]) => resolverSiguienteUrlMock(...args),
+  resolverSiguienteUrlPorFondos: (...args: unknown[]) => resolverSiguienteUrlPorFondosMock(...args),
   resultadoDeEstado: () => null,
 }));
 
@@ -121,6 +123,7 @@ beforeEach(async () => {
   vi.resetAllMocks();
   headersCorsMock.mockResolvedValue(CORS_HEADERS);
   resolverSiguienteUrlMock.mockResolvedValue(null);
+  resolverSiguienteUrlPorFondosMock.mockResolvedValue(null);
   const cobrosLib = await import('@/lib/cobros');
   (cobrosLib.aplicarEstadoDePago as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
     status: 'pagado',
@@ -334,5 +337,157 @@ describe('POST /api/upsell/cobrar — scope del token entre funnels', () => {
     expect(b.status).toBe(404);
 
     expect(crearPagoOffSessionMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/upsell/cobrar — decline sin_fondos redirige al downsell (migración 014)', () => {
+  /** Igual que `filaPagina` de arriba, en este describe: la fila del paso 3. */
+  function filaPagina(over: Record<string, unknown> = {}) {
+    return {
+      id: 'pagina-upsell-1',
+      tipo: 'upsell',
+      url_exito: null,
+      url_rechazo: null,
+      producto_id: 'prod-1',
+      whop_plan_id: 'plan_1',
+      activo: true,
+      funnel_id: FUNNEL,
+      funnel_de_la_orden: FUNNEL,
+      ...over,
+    };
+  }
+
+  async function mockearCobroFallidoPorFondos(paginaId: string) {
+    qMock.mockResolvedValueOnce(undefined);
+    const cobrosLib = await import('@/lib/cobros');
+    const cobroFallido = {
+      id: 'cobro-1',
+      orden_id: ORDEN_BASE.id,
+      pagina_id: paginaId,
+      producto_id: 'prod-1',
+      whop_plan_id: 'plan_1',
+      whop_payment_id: 'pay_1',
+      status: 'fallido' as const,
+      decline_code: 'insufficient_funds',
+      failure_message: 'Your card has insufficient funds to complete this purchase.',
+      idempotency_key: `${ORDEN_BASE.id}:${paginaId}`,
+      monto: null,
+      moneda: null,
+      origen: 'upsell' as const,
+      reembolsado_at: null,
+      disputa_at: null,
+      email_enviado_at: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+    // El cobro que trae buscarCobro ANTES de llamar a Whop (paso 5): recién
+    // creado, sin whop_payment_id. Después de aplicarEstadoDePago, buscarCobro
+    // se vuelve a llamar y ahí sí devuelve el fallido con el decline_code — es
+    // el mismo patrón de dos llamadas que usa el resto del archivo.
+    (cobrosLib.buscarCobro as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ ...cobroFallido, whop_payment_id: null, status: 'creando', decline_code: null })
+      .mockResolvedValue(cobroFallido);
+    (cobrosLib.aplicarEstadoDePago as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'fallido',
+      cambio: true,
+    });
+  }
+
+  it('con downsell_por_fondos_id configurado, la respuesta trae esa URL como siguienteUrl', async () => {
+    const { POST } = await import('@/app/api/upsell/cobrar/route');
+    resolverTokenMock.mockResolvedValue({ ok: true, orden: ORDEN_BASE });
+    q1Mock.mockResolvedValueOnce(filaPagina());
+    await mockearCobroFallidoPorFondos('pagina-upsell-1');
+    crearPagoOffSessionMock.mockResolvedValue({
+      id: 'pay_1',
+      substatus: 'failed',
+      decline_code: 'insufficient_funds',
+      settlement_amount: null,
+      currency: null,
+    });
+    // El destino real lo resuelve lib/funnels.ts (mockeado acá): se verifica
+    // que EL ENDPOINT lo pida por el camino de fondos, no el genérico.
+    resolverSiguienteUrlPorFondosMock.mockResolvedValue('https://elfunnel.com/downsell-17?ot=el-token-de-la-orden');
+
+    const r = await POST(requestCobrar({ token: ORDEN_BASE.token, slug: 'upsell-1' }));
+    const body = await r.json();
+
+    expect(r.status).toBe(200);
+    expect(body.estado).toBe('fallido');
+    expect(body.siguienteUrl).toBe('https://elfunnel.com/downsell-17?ot=el-token-de-la-orden');
+    // El camino genérico (resultadoDeEstado/resolverSiguienteUrl) NO se usa
+    // para este decline: se llama el de fondos, con el pagina_id del cobro.
+    expect(resolverSiguienteUrlPorFondosMock).toHaveBeenCalledWith('pagina-upsell-1', ORDEN_BASE.token);
+    expect(resolverSiguienteUrlMock).not.toHaveBeenCalled();
+  });
+
+  it('sin downsell_por_fondos_id configurado, siguienteUrl es null (el mock ya lo devuelve así) — comportamiento sin romper nada para quien no lo configuró', async () => {
+    const { POST } = await import('@/app/api/upsell/cobrar/route');
+    resolverTokenMock.mockResolvedValue({ ok: true, orden: ORDEN_BASE });
+    q1Mock.mockResolvedValueOnce(filaPagina());
+    await mockearCobroFallidoPorFondos('pagina-upsell-1');
+    crearPagoOffSessionMock.mockResolvedValue({
+      id: 'pay_1',
+      substatus: 'failed',
+      decline_code: 'insufficient_funds',
+      settlement_amount: null,
+      currency: null,
+    });
+    // resolverSiguienteUrlPorFondosMock ya resuelve `null` por default (beforeEach).
+
+    const r = await POST(requestCobrar({ token: ORDEN_BASE.token, slug: 'upsell-1' }));
+    const body = await r.json();
+
+    expect(r.status).toBe(200);
+    expect(body.estado).toBe('fallido');
+    expect(body.siguienteUrl).toBeNull();
+    expect(resolverSiguienteUrlPorFondosMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('un decline que NO es sin_fondos (ej. lost_card) sigue el camino genérico, no el de fondos', async () => {
+    const { POST } = await import('@/app/api/upsell/cobrar/route');
+    resolverTokenMock.mockResolvedValue({ ok: true, orden: ORDEN_BASE });
+    q1Mock.mockResolvedValueOnce(filaPagina());
+
+    qMock.mockResolvedValueOnce(undefined);
+    const cobrosLib = await import('@/lib/cobros');
+    const cobroFallido = {
+      id: 'cobro-2',
+      orden_id: ORDEN_BASE.id,
+      pagina_id: 'pagina-upsell-1',
+      producto_id: 'prod-1',
+      whop_plan_id: 'plan_1',
+      whop_payment_id: 'pay_2',
+      status: 'fallido' as const,
+      decline_code: 'lost_card',
+      failure_message: null,
+      idempotency_key: `${ORDEN_BASE.id}:pagina-upsell-1`,
+      monto: null,
+      moneda: null,
+      origen: 'upsell' as const,
+      reembolsado_at: null,
+      disputa_at: null,
+      email_enviado_at: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+    (cobrosLib.buscarCobro as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ ...cobroFallido, whop_payment_id: null, status: 'creando', decline_code: null })
+      .mockResolvedValue(cobroFallido);
+    (cobrosLib.aplicarEstadoDePago as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'fallido',
+      cambio: true,
+    });
+    crearPagoOffSessionMock.mockResolvedValue({
+      id: 'pay_2',
+      substatus: 'failed',
+      decline_code: 'lost_card',
+      settlement_amount: null,
+      currency: null,
+    });
+
+    await POST(requestCobrar({ token: ORDEN_BASE.token, slug: 'upsell-1' }));
+
+    expect(resolverSiguienteUrlPorFondosMock).not.toHaveBeenCalled();
   });
 });

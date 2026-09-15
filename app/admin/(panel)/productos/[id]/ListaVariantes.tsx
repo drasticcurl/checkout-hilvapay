@@ -278,7 +278,7 @@ function VarianteCard({ plan }: { plan: PlanConPagina }): JSX.Element {
             {enviandoDatos ? 'Guardando…' : 'Guardar precio'}
           </Boton>
           {guardadoDatos && !enviandoDatos ? (
-            <span className="text-[12px] font-medium text-vivo-oscuro">Guardado.</span>
+            <span className="text-[12px] font-medium text-vivo">Guardado.</span>
           ) : null}
           {errorDatos ? (
             <span role="alert" className="text-[12px] font-medium text-peligro">
@@ -325,7 +325,7 @@ function VarianteCard({ plan }: { plan: PlanConPagina }): JSX.Element {
                 href={`/pagos/${plan.pagina.slug}`}
                 target="_blank"
                 rel="noreferrer noopener"
-                className="inline-flex items-center gap-1 pb-1.5 text-[12px] font-medium text-acento hover:text-acento-oscuro hover:underline"
+                className="inline-flex items-center gap-1 pb-1.5 text-[12px] font-medium text-acento hover:underline"
               >
                 Ver <ArrowSquareOut size={11} aria-hidden="true" />
               </a>
@@ -336,7 +336,7 @@ function VarianteCard({ plan }: { plan: PlanConPagina }): JSX.Element {
                 {enviandoSlug ? 'Guardando…' : 'Guardar slug'}
               </Boton>
               {guardadoSlug && !enviandoSlug ? (
-                <span className="text-[12px] font-medium text-vivo-oscuro">Guardado.</span>
+                <span className="text-[12px] font-medium text-vivo">Guardado.</span>
               ) : null}
               {errorSlug ? (
                 <span role="alert" className="text-[12px] font-medium text-peligro">
@@ -436,7 +436,7 @@ function VarianteCard({ plan }: { plan: PlanConPagina }): JSX.Element {
                 {enviandoChk ? 'Guardando…' : 'Guardar checkout'}
               </Boton>
               {guardadoChk && !enviandoChk ? (
-                <span className="text-[12px] font-medium text-vivo-oscuro">Guardado.</span>
+                <span className="text-[12px] font-medium text-vivo">Guardado.</span>
               ) : null}
               {errorChk ? (
                 <span role="alert" className="text-[12px] font-medium text-peligro">

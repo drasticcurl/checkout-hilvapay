@@ -54,7 +54,7 @@ export function FilaPlan({ plan, whopProductId, nombreSoft }: Props): JSX.Elemen
           {esRenewal ? (
             <div className="flex gap-2 rounded-ctrl border border-peligro-borde bg-peligro-suave px-3 py-2">
               <Warning size={15} className="mt-px shrink-0 text-peligro" aria-hidden="true" />
-              <p className="text-[12px] leading-relaxed text-peligro-oscuro">
+              <p className="text-[12px] leading-relaxed text-peligro">
                 Este plan es una suscripción: Whop le va a cobrar de nuevo al comprador el período
                 siguiente, solo, sin que este checkout intervenga. Si querés un pago único, cambialo en
                 el dashboard de Whop antes de vincularlo.

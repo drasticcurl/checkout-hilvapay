@@ -43,7 +43,7 @@ export function CopiarUrlButton({ url }: { url: string }): JSX.Element {
       className={unir(
         'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-micro',
         'transition-[background-color,color] duration-150',
-        copiado ? 'text-vivo-oscuro' : 'text-tinta-3 hover:bg-panel-sup2 hover:text-tinta',
+        copiado ? 'text-vivo' : 'text-tinta-3 hover:bg-panel-sup2 hover:text-tinta',
       )}
     >
       {copiado ? <Check size={13} weight="bold" /> : <Copy size={13} />}

@@ -165,7 +165,7 @@ function FormularioAgregar({
               <button
                 type="button"
                 onClick={() => setModoManual(true)}
-                className="text-[12px] font-medium text-acento transition-colors hover:text-acento-oscuro hover:underline"
+                className="text-[12px] font-medium text-acento transition-colors hover:underline"
               >
                 Prefiero pegar el plan_id a mano
               </button>
@@ -192,7 +192,7 @@ function FormularioAgregar({
                 <button
                   type="button"
                   onClick={() => setModoManual(false)}
-                  className="text-[12px] font-medium text-acento transition-colors hover:text-acento-oscuro hover:underline"
+                  className="text-[12px] font-medium text-acento transition-colors hover:underline"
                 >
                   Usar el selector
                 </button>

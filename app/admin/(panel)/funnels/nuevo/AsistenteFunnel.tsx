@@ -87,7 +87,7 @@ export function AsistenteFunnel({ variantes }: Props): JSX.Element {
 
   return (
     <div className="max-w-2xl space-y-6">
-      <div className="space-y-5 rounded-card border border-panel-borde bg-panel-sup p-5 shadow-panel">
+      <div className="space-y-5 rounded-card border border-panel-borde bg-panel-sup p-5 shadow-sombra">
         <EncabezadoPantalla
           titulo="Antes de armar los pasos"
           descripcion="El producto principal y la página de gracias definen el funnel. Una vez elegidos, se agregan los upsells."

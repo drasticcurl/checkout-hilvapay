@@ -12,7 +12,7 @@
  */
 import { NextResponse } from 'next/server';
 import { q1 } from '@/lib/db';
-import { resolverSiguienteUrl, resultadoDeEstado } from '@/lib/funnels';
+import { resolverSiguienteUrl, resolverSiguienteUrlPorFondos, resultadoDeEstado } from '@/lib/funnels';
 import { aplicarEstadoDePago, encolarSalida } from '@/lib/cobros';
 import { esFinal, mensajeParaComprador, clasificarDecline } from '@/lib/estado-pago';
 import { obtenerPago, WhopError } from '@/lib/whop';
@@ -125,8 +125,20 @@ async function respuesta(cobro: Cobro, token: string): Promise<RespuestaCobro> {
   // `requiere_tarjeta`: en esos casos todavía no hay destino y el loader sigue
   // puleando. Ojo con `requiere_tarjeta`, que NO es un rechazo: el comprador
   // quiso pagar y el banco pidió autenticación.
-  const resultado = resultadoDeEstado(cobro.status);
-  const siguienteUrl = resultado ? await resolverSiguienteUrl(cobro.pagina_id, resultado, token) : null;
+  //
+  // Mismo criterio que `respuestaDesdeCobro` de `app/api/upsell/cobrar/route.ts`
+  // (migración 014): fondos insuficientes no pasa por
+  // `resultadoDeEstado('fallido') → 'rechazado' → paso_rechazado_id`, que exige
+  // `permite_rechazo`. Usa `downsell_por_fondos_id` en su lugar, vía
+  // `resolverSiguienteUrlPorFondos`.
+  const declineAccion = cobro.status === 'fallido' && cobro.decline_code ? clasificarDecline(cobro.decline_code) : null;
+  const siguienteUrl =
+    declineAccion === 'sin_fondos'
+      ? await resolverSiguienteUrlPorFondos(cobro.pagina_id, token)
+      : await (async () => {
+          const resultado = resultadoDeEstado(cobro.status);
+          return resultado ? resolverSiguienteUrl(cobro.pagina_id, resultado, token) : null;
+        })();
 
   return {
     cobroId: cobro.id,

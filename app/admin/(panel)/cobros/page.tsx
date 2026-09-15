@@ -139,7 +139,7 @@ export default async function CobrosPage(): Promise<JSX.Element> {
                   </Td>
                   <Td>
                     {c.decline_code ? (
-                      <span className="font-mono text-[12px] text-peligro-oscuro">{c.decline_code}</span>
+                      <span className="font-mono text-[12px] text-peligro">{c.decline_code}</span>
                     ) : (
                       <SinDato />
                     )}

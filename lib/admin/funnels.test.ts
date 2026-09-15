@@ -152,15 +152,20 @@ function crearClienteFake() {
       }
 
       if (s.startsWith('update paginas set paso_aceptado_id')) {
-        const [paso_aceptado_id, paso_rechazado_id, id] = params as [string | null, string | null, string];
+        const [paso_aceptado_id, paso_rechazado_id, downsell_por_fondos_id, id] = params as [
+          string | null,
+          string | null,
+          string | null,
+          string,
+        ];
         const fila = paginas.get(id);
         if (!fila) throw new Error('no existe');
-        if (paso_aceptado_id === id || paso_rechazado_id === id) {
+        if (paso_aceptado_id === id || paso_rechazado_id === id || downsell_por_fondos_id === id) {
           throw new Error(
             'new row for relation "paginas" violates check constraint "paginas_no_autoreferencia"',
           );
         }
-        Object.assign(fila, { paso_aceptado_id, paso_rechazado_id });
+        Object.assign(fila, { paso_aceptado_id, paso_rechazado_id, downsell_por_fondos_id });
         return { rows: [], rowCount: 1 };
       }
 
@@ -206,6 +211,7 @@ function pasoFront(over: Partial<EntradaFunnel['pasos'][0]> = {}): EntradaFunnel
     permite_rechazo: false,
     paso_aceptado_indice: null,
     paso_rechazado_indice: null,
+    downsell_por_fondos_indice: null,
     delay_segundos: null,
     ...over,
   };
@@ -223,6 +229,7 @@ function pasoUpsell(over: Partial<EntradaFunnel['pasos'][0]> = {}): EntradaFunne
     permite_rechazo: true,
     paso_aceptado_indice: null,
     paso_rechazado_indice: null,
+    downsell_por_fondos_indice: null,
     delay_segundos: null,
     ...over,
   };

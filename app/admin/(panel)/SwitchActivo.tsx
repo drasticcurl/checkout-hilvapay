@@ -81,13 +81,13 @@ export function SwitchActivo({
         className={unir(
           'relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full',
           'transition-[background-color,box-shadow] duration-200 disabled:opacity-50',
-          valor ? 'bg-vivo shadow-panel' : 'bg-panel-sup3 hover:bg-tinta-4',
+          valor ? 'bg-vivo shadow-sombra' : 'bg-panel-sup3 hover:bg-tinta-4',
         )}
       >
         <span className="sr-only">{valor ? 'Cobrando, apagar' : 'Apagado, encender'}</span>
         <span
           className={unir(
-            'inline-block h-[18px] w-[18px] rounded-full bg-white shadow-panel transition-transform duration-200',
+            'inline-block h-[18px] w-[18px] rounded-full bg-white shadow-sombra transition-transform duration-200',
             valor ? 'translate-x-[18px]' : 'translate-x-0.5',
           )}
         />

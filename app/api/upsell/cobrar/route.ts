@@ -27,7 +27,7 @@ import { headersCors } from '@/lib/cors';
 import { resolverToken } from '@/lib/token';
 import { q, q1 } from '@/lib/db';
 import { crearLimitador, ipDelRequest } from '@/lib/rate-limit';
-import { resolverSiguienteUrl, resultadoDeEstado } from '@/lib/funnels';
+import { resolverSiguienteUrl, resolverSiguienteUrlPorFondos, resultadoDeEstado } from '@/lib/funnels';
 import { aplicarEstadoDePago, buscarCobro } from '@/lib/cobros';
 import { esFinal, mensajeParaComprador, clasificarDecline } from '@/lib/estado-pago';
 import { crearPagoOffSession, crearCheckoutConfiguration, WhopError } from '@/lib/whop';
@@ -496,6 +496,7 @@ function respuestaProcesando(cobro: Cobro, _token: string): RespuestaCobro {
  */
 async function respuestaDesdeCobro(cobro: Cobro, token: string): Promise<RespuestaCobro> {
   const pedirTarjeta = cobro.status === 'requiere_tarjeta';
+  const declineAccion = cobro.status === 'fallido' && cobro.decline_code ? clasificarDecline(cobro.decline_code) : null;
   const mensaje =
     cobro.status === 'requiere_tarjeta'
       ? mensajeParaComprador(clasificarDecline(cobro.decline_code))
@@ -512,8 +513,21 @@ async function respuestaDesdeCobro(cobro: Cobro, token: string): Promise<Respues
   // es una página suelta (y usa `url_exito`/`url_rechazo`). Antes esto leía las
   // URLs de la página acá mismo, y además NO le pegaba el token — lo cual
   // funcionaba solo mientras toda la cadena viviera en el mismo origen.
-  const resultado = resultadoDeEstado(cobro.status);
-  const siguienteUrl = resultado ? await resolverSiguienteUrl(cobro.pagina_id, resultado, token) : null;
+  //
+  // Fondos insuficientes (migración 014) es un camino aparte: NO pasa por
+  // `resultadoDeEstado('fallido') → 'rechazado' → paso_rechazado_id`, que exige
+  // `permite_rechazo` (el botón de rechazo visible). Sin fondos no hay click del
+  // comprador que active ese botón, así que usa `downsell_por_fondos_id` — el
+  // destino propio de este motivo, resuelto por `resolverSiguienteUrlPorFondos`,
+  // que devuelve `null` si el operador no lo configuró (mismo comportamiento de
+  // hoy, no se rompe nada para quien no lo use).
+  const siguienteUrl =
+    declineAccion === 'sin_fondos'
+      ? await resolverSiguienteUrlPorFondos(cobro.pagina_id, token)
+      : await (async () => {
+          const resultado = resultadoDeEstado(cobro.status);
+          return resultado ? resolverSiguienteUrl(cobro.pagina_id, resultado, token) : null;
+        })();
 
   return {
     cobroId: cobro.id,

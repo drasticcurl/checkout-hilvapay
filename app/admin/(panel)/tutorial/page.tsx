@@ -86,7 +86,7 @@ function FilaPaso({ paso }: { paso: PasoConEstado }): JSX.Element {
         <p
           className={unir(
             'text-[12px] font-medium',
-            paso.hecho ? 'text-vivo-oscuro' : destacado ? 'text-acento-oscuro' : 'text-tinta-3',
+            paso.hecho ? 'text-vivo' : destacado ? 'text-acento' : 'text-tinta-3',
           )}
         >
           {paso.detalle}

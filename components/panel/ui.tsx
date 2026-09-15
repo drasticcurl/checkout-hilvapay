@@ -34,15 +34,21 @@ const BASE_BOTON =
   'active:translate-y-px disabled:pointer-events-none disabled:opacity-45';
 
 const VARIANTES_BOTON: Record<VarianteBoton, string> = {
-  primario: 'bg-tinta text-white shadow-panel hover:bg-black',
+  // Antes `bg-tinta` (casi negro, en el modo claro). Con el panel a dark
+  // (sesión 2026-09-15) `tinta` pasó a ser la escala de TEXTO, invertida a casi
+  // blanca — usarla como fondo de botón con `text-white` encima se rompería
+  // (texto blanco sobre fondo casi blanco). La acción primaria pasa al acento:
+  // es el patrón estándar de un dark UI, y es consistente con que el resto de
+  // los acentos (vivo/peligro) ya usan su propio `oscuro` como fondo de botón.
+  primario: 'bg-acento-oscuro text-white shadow-sombra hover:bg-acento-hover',
   secundario:
-    'border border-panel-bordeFuerte bg-panel-sup text-tinta shadow-panel hover:border-tinta-4 hover:bg-panel-sup2',
+    'border border-panel-bordeFuerte bg-panel-sup text-tinta shadow-sombra hover:border-tinta-4 hover:bg-panel-sup2',
   fantasma: 'text-tinta-2 hover:bg-panel-sup2 hover:text-tinta',
-  // El anillo de foco cobalto de globals.css sirve para los cinco, incluso para
-  // el rojo y el verde: va con `outline-offset: 2px`, así que cae sobre el fondo
-  // claro de la tarjeta y no sobre el relleno del botón.
-  peligro: 'bg-peligro text-white shadow-panel hover:bg-peligro-oscuro',
-  vivo: 'bg-vivo-oscuro text-white shadow-panel hover:bg-[#166534]',
+  // El anillo de foco del panel (globals.css, `[data-panel-dark]`) sirve para
+  // los cinco, incluso para el rojo y el verde: va con `outline-offset: 2px`,
+  // así que cae sobre el fondo de la tarjeta y no sobre el relleno del botón.
+  peligro: 'bg-peligro-oscuro text-white shadow-sombra hover:bg-peligro-hover',
+  vivo: 'bg-vivo-oscuro text-white shadow-sombra hover:bg-vivo-hover',
 };
 
 const TAMANOS_BOTON: Record<TamanoBoton, string> = {
@@ -175,7 +181,7 @@ export function Tarjeta({
 }: { children: ReactNode } & React.HTMLAttributes<HTMLDivElement>): JSX.Element {
   return (
     <div
-      className={unir('rounded-card border border-panel-borde bg-panel-sup shadow-panel', className)}
+      className={unir('rounded-card border border-panel-borde bg-panel-sup shadow-sombra', className)}
       {...props}
     >
       {children}
@@ -215,9 +221,13 @@ type TonoInsignia = 'neutro' | 'vivo' | 'peligro' | 'acento' | 'alerta';
 
 const TONOS_INSIGNIA: Record<TonoInsignia, string> = {
   neutro: 'border-panel-bordeFuerte bg-panel-sup2 text-tinta-2',
-  vivo: 'border-vivo-borde bg-vivo-suave text-vivo-oscuro',
-  peligro: 'border-peligro-borde bg-peligro-suave text-peligro-oscuro',
-  acento: 'border-acento-borde bg-acento-suave text-acento-oscuro',
+  // El texto de cada tono usa el `DEFAULT` de su acento (brillante), no
+  // `*-oscuro` (pensado para fondo de botón sólido con texto blanco encima).
+  // Verificado con contraste real (sesión 2026-09-15): `oscuro` sobre `suave`
+  // da 2.9-3.3:1 y NO pasa AA; `DEFAULT` sobre el mismo `suave` da 5.8-8.8:1.
+  vivo: 'border-vivo-borde bg-vivo-suave text-vivo',
+  peligro: 'border-peligro-borde bg-peligro-suave text-peligro',
+  acento: 'border-acento-borde bg-acento-suave text-acento',
   alerta: 'border-alerta-borde bg-alerta-suave text-alerta',
 };
 
@@ -261,7 +271,7 @@ export function EstadoVivo({ activo, className }: { activo: boolean; className?:
     <span
       className={unir(
         'inline-flex items-center gap-1.5 text-[12px] font-medium',
-        activo ? 'text-vivo-oscuro' : 'text-tinta-3',
+        activo ? 'text-vivo' : 'text-tinta-3',
         className,
       )}
     >
@@ -327,7 +337,7 @@ export function TablaEnvoltorio({
   return (
     <div
       className={unir(
-        'overflow-auto rounded-card border border-panel-borde bg-panel-sup shadow-panel',
+        'overflow-auto rounded-card border border-panel-borde bg-panel-sup shadow-sombra',
         conAltura && 'max-h-[min(70dvh,44rem)]',
         className,
       )}
@@ -439,7 +449,7 @@ export function Interruptor({
       <span className="sr-only">{etiquetaAccesible}</span>
       <span
         className={unir(
-          'inline-block h-[18px] w-[18px] rounded-full bg-white shadow-panel transition-transform duration-200',
+          'inline-block h-[18px] w-[18px] rounded-full bg-white shadow-sombra transition-transform duration-200',
           activo ? 'translate-x-[18px]' : 'translate-x-0.5',
         )}
       />
@@ -489,7 +499,7 @@ export function OpcionRadio({
         )}
       >
         <span
-          className={unir('block text-[13px] font-medium', checked ? 'text-acento-oscuro' : 'text-tinta')}
+          className={unir('block text-[13px] font-medium', checked ? 'text-acento' : 'text-tinta')}
         >
           {titulo}
         </span>
@@ -534,10 +544,12 @@ export function EstadoVacio({
 type TonoAviso = 'peligro' | 'alerta' | 'acento' | 'vivo';
 
 const TONOS_AVISO: Record<TonoAviso, string> = {
-  peligro: 'border-peligro-borde bg-peligro-suave text-peligro-oscuro',
+  // Mismo criterio que TONOS_INSIGNIA: DEFAULT (brillante) como texto, nunca
+  // `*-oscuro` (pensado para fondo de botón sólido con texto blanco).
+  peligro: 'border-peligro-borde bg-peligro-suave text-peligro',
   alerta: 'border-alerta-borde bg-alerta-suave text-alerta',
-  acento: 'border-acento-borde bg-acento-suave text-acento-oscuro',
-  vivo: 'border-vivo-borde bg-vivo-suave text-vivo-oscuro',
+  acento: 'border-acento-borde bg-acento-suave text-acento',
+  vivo: 'border-vivo-borde bg-vivo-suave text-vivo',
 };
 
 /** Aviso en línea: errores de formulario, advertencias de precio, avisos de estado. */

@@ -99,7 +99,7 @@ export function RevisarPlanes(): JSX.Element {
             {resp.revisados.map((r) => (
               <li key={r.productoId} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px]">
                 {r.estado === 'coincide' ? (
-                  <CheckCircle size={14} className="shrink-0 text-vivo-oscuro" aria-hidden="true" />
+                  <CheckCircle size={14} className="shrink-0 text-vivo" aria-hidden="true" />
                 ) : r.estado === 'indeterminado' ? (
                   <Warning size={14} className="shrink-0 text-alerta" aria-hidden="true" />
                 ) : (
