@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   actualizarPagina,
+  borrarPagina,
   buscarPagina,
   setActivoPagina,
   type EntradaPagina,
@@ -71,4 +72,24 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     console.error('[api/admin/paginas/:id] error al editar:', mensaje);
     return NextResponse.json({ error: 'error_interno' }, { status: 500 });
   }
+}
+
+/**
+ * Borra la página de verdad. Irreversible, a diferencia del switch de `PATCH
+ * {activo}`. Solo funciona si la página no tiene ninguna orden ni ningún cobro
+ * (`borrarPagina`, `lib/admin/paginas.ts`): si tiene alguno, 409 con el motivo,
+ * para que la pantalla lo explique en vez de un 500 de constraint violada.
+ *
+ * Es el botón que le faltaba a `ListaVariantes.tsx` para destrabar el mensaje
+ * de `borrarProducto` ("tiene_links... borrá primero sus links") — antes de
+ * esto no existía ninguna forma de borrar una página huérfana (sin funnel,
+ * sin cobros) desde el panel.
+ */
+export async function DELETE(_req: Request, { params }: { params: { id: string } }): Promise<NextResponse> {
+  const resultado = await borrarPagina(params.id);
+  if (!resultado.ok) {
+    const status = resultado.error === 'no_encontrada' ? 404 : 409;
+    return NextResponse.json({ error: resultado.error }, { status });
+  }
+  return NextResponse.json({ ok: true });
 }

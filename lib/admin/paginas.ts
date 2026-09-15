@@ -222,3 +222,49 @@ export async function actualizarPagina(id: string, datos: EntradaPagina): Promis
 export async function setActivoPagina(id: string, activo: boolean): Promise<void> {
   await q('update paginas set activo = $1, updated_at = now() where id = $2', [activo, id]);
 }
+
+export type ResultadoBorradoPagina =
+  | { ok: true }
+  | { ok: false; error: 'no_encontrada' | 'tiene_ordenes' | 'tiene_cobros' };
+
+/**
+ * Borra una página (un link de pago) de verdad — irreversible, a diferencia
+ * del switch de arriba.
+ *
+ * Encontrada la falta de esto en el bug reportado el 2026-09-15: `borrarProducto`
+ * (`lib/admin/productos.ts`) rechaza con `tiene_links` en cuanto CUALQUIER
+ * página apunta al producto, y su propio mensaje de error dice la salida
+ * ("borrá primero sus links") — pero no existía ningún botón para borrar una
+ * página sola. Es un callejón sin salida real: sacar un paso de un funnel o
+ * borrar el funnel entero (`borrarFunnel`, `lib/admin/funnels.ts`) NO borra la
+ * página — la deja huérfana y viva, a propósito, para no perder el historial
+ * de cobros de un paso que se sacó del flujo. El resultado práctico es que casi
+ * todo producto que alguna vez tuvo un paso en un funnel queda imposible de
+ * borrar, aunque ese funnel ya no exista.
+ *
+ * El chequeo es el mismo espíritu que `borrarProducto`: `ordenes.pagina_id` y
+ * `cobros.pagina_id` son `references ... not null` SIN cascada (§ ver
+ * `db/migrations/001_init.sql`), así que la base ya lo impediría con un 500 de
+ * constraint violada — esto chequea antes para devolver un error que la
+ * pantalla pueda explicar.
+ *
+ * Las tres columnas de flechas del grafo (`paso_aceptado_id`,
+ * `paso_rechazado_id`, `downsell_por_fondos_id`) son `on delete set null`
+ * (migraciones 003 y 014): un paso que apuntaba a esta página como destino
+ * queda con esa flecha en null, no roto — el operador lo ve en el editor como
+ * "sin destino" y lo puede reconfigurar, en vez de que el borrado falle por
+ * eso.
+ */
+export async function borrarPagina(id: string): Promise<ResultadoBorradoPagina> {
+  const existe = await q1<{ id: string }>('select id from paginas where id = $1', [id]);
+  if (!existe) return { ok: false, error: 'no_encontrada' };
+
+  const tieneOrdenes = await q1<{ id: string }>('select id from ordenes where pagina_id = $1 limit 1', [id]);
+  if (tieneOrdenes) return { ok: false, error: 'tiene_ordenes' };
+
+  const tieneCobros = await q1<{ id: string }>('select id from cobros where pagina_id = $1 limit 1', [id]);
+  if (tieneCobros) return { ok: false, error: 'tiene_cobros' };
+
+  await q('delete from paginas where id = $1', [id]);
+  return { ok: true };
+}

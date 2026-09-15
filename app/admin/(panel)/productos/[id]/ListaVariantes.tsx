@@ -19,9 +19,10 @@
  */
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowSquareOut, Star, Warning } from '@phosphor-icons/react/ssr';
+import { ArrowSquareOut, Star, Trash, Warning } from '@phosphor-icons/react/ssr';
 import type { ConfigPagina, ProductoPlan } from '../../../../../lib/tipos';
 import { Aviso, Boton, Campo, Codigo, EstadoVivo, Insignia, Interruptor, Tarjeta, clasesControl } from '@/components/panel/ui';
+import { Dialogo } from '@/components/panel/Dialogo';
 import { SwitchActivo } from '../../SwitchActivo';
 
 /** La forma que devuelve la API: la variante más su página resuelta. */
@@ -89,6 +90,41 @@ function VarianteCard({ plan }: { plan: PlanConPagina }): JSX.Element {
   const [guardadoChk, setGuardadoChk] = useState(false);
 
   const [haciendoDefault, setHaciendoDefault] = useState(false);
+
+  // Borrado de la página: irreversible, a diferencia del switch de arriba.
+  // Solo tiene sentido ofrecerlo cuando el link ya está inactivo (mismo
+  // criterio que "desactivalo primero" del mensaje de borrarProducto) — no
+  // hay razón para borrar un link que está cobrando activamente sin antes
+  // apagarlo, y la confirmación de dos pasos (switch + borrar) es la misma
+  // fricción a propósito que ya tiene BorrarProductoButton.
+  const [confirmandoBorrado, setConfirmandoBorrado] = useState(false);
+  const [borrandoPagina, setBorrandoPagina] = useState(false);
+  const [errorBorrado, setErrorBorrado] = useState<string | null>(null);
+
+  async function borrarLink(): Promise<void> {
+    if (!plan.pagina) return;
+    setBorrandoPagina(true);
+    setErrorBorrado(null);
+    try {
+      const res = await fetch(`/api/admin/paginas/${plan.pagina.id}`, { method: 'DELETE' });
+      if (res.ok) {
+        setConfirmandoBorrado(false);
+        router.refresh();
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      const mensajes: Record<string, string> = {
+        tiene_ordenes: 'Este link tiene al menos una orden real. No se puede borrar sin perder ese historial.',
+        tiene_cobros: 'Este link tiene cobros históricos. No se puede borrar sin perder ese historial.',
+        no_encontrada: 'Ya no existe. Recargá la pantalla.',
+      };
+      setErrorBorrado(mensajes[data.error as string] ?? 'No se pudo borrar. Probá de nuevo.');
+    } catch {
+      setErrorBorrado('No se pudo contactar al servidor.');
+    } finally {
+      setBorrandoPagina(false);
+    }
+  }
 
   async function guardarDatos(e: React.FormEvent<HTMLFormElement>): Promise<void> {
     e.preventDefault();
@@ -223,6 +259,7 @@ function VarianteCard({ plan }: { plan: PlanConPagina }): JSX.Element {
   }
 
   return (
+    <>
     <Tarjeta className="space-y-4 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
@@ -344,6 +381,22 @@ function VarianteCard({ plan }: { plan: PlanConPagina }): JSX.Element {
                   {errorSlug === 'slug_ya_existe' ? 'ese slug ya está en uso' : errorSlug}).
                 </span>
               ) : null}
+              {/* Solo con el link ya inactivo: no hay razón para borrar un
+                  link que está cobrando sin antes apagarlo — es la misma
+                  fricción a propósito que el switch de arriba ya exige antes
+                  de encender, ahora del otro lado. */}
+              {!plan.pagina.activo ? (
+                <Boton
+                  type="button"
+                  variante="fantasma"
+                  tamano="sm"
+                  icono={<Trash size={13} aria-hidden="true" />}
+                  onClick={() => setConfirmandoBorrado(true)}
+                  className="ml-auto text-tinta-3 hover:text-peligro"
+                >
+                  Borrar link
+                </Boton>
+              ) : null}
             </div>
           </form>
         ) : (
@@ -448,6 +501,44 @@ function VarianteCard({ plan }: { plan: PlanConPagina }): JSX.Element {
         </div>
       ) : null}
     </Tarjeta>
+
+    {confirmandoBorrado && plan.pagina ? (
+      <Dialogo
+        titulo={`Borrar el link de "${plan.etiqueta}"`}
+        onCerrar={() => {
+          if (!borrandoPagina) setConfirmandoBorrado(false);
+        }}
+        ancho="sm"
+        pie={
+          <>
+            <Boton variante="fantasma" onClick={() => setConfirmandoBorrado(false)} disabled={borrandoPagina}>
+              Cancelar
+            </Boton>
+            <Boton variante="peligro" onClick={() => void borrarLink()} disabled={borrandoPagina}>
+              {borrandoPagina ? 'Borrando…' : 'Borrar el link'}
+            </Boton>
+          </>
+        }
+      >
+        <div className="flex gap-3 rounded-ctrl border border-peligro-borde bg-peligro-suave px-3.5 py-3">
+          <Warning size={17} className="mt-px shrink-0 text-peligro" aria-hidden="true" />
+          <p className="text-[13px] leading-relaxed text-peligro">
+            No se puede deshacer. La página <code className="font-mono">/pagos/{plan.pagina.slug}</code>{' '}
+            deja de existir.
+          </p>
+        </div>
+        <p className="text-[13px] leading-relaxed text-tinta-2">
+          Solo funciona si el link no tiene ninguna orden ni ningún cobro histórico. Si los tiene, no
+          se puede borrar sin perder ese historial.
+        </p>
+        {errorBorrado ? (
+          <p role="alert" className="text-[13px] font-medium text-peligro">
+            {errorBorrado}
+          </p>
+        ) : null}
+      </Dialogo>
+    ) : null}
+    </>
   );
 }
 
